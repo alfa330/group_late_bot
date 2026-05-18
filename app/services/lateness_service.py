@@ -14,18 +14,15 @@ logger = logging.getLogger(__name__)
 TZ = pytz.timezone(settings.timezone)
 
 # In-memory cache for deduplication
-# If the server restarts, this will be empty, and it might resend today's events.
 sent_events_cache: Set[str] = set()
 
-
-def _make_event_key(emp_id: str, date: str, start: str, in_mark: str, late: int) -> str:
-    raw = f"{emp_id}:{date}:{start}:{in_mark}:{late}"
+def _make_event_key(emp_id: str, date: str, event_type: str) -> str:
+    raw = f"{emp_id}:{date}:{event_type}"
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
-
-def _format_dt(dt_str: Optional[str]) -> str:
+def _parse_dt(dt_str: Optional[str]) -> Optional[datetime]:
     if not dt_str:
-        return "—"
+        return None
     for fmt in (
         "%Y-%m-%dT%H:%M:%S.%fZ",
         "%Y-%m-%dT%H:%M:%SZ",
@@ -38,32 +35,49 @@ def _format_dt(dt_str: Optional[str]) -> str:
             dt = datetime.strptime(dt_str, fmt)
             if dt.tzinfo is None:
                 dt = pytz.utc.localize(dt)
-            local = dt.astimezone(TZ)
-            return local.strftime("%H:%M")
+            return dt.astimezone(TZ)
         except ValueError:
             continue
-    return dt_str
+    return None
 
+def _format_dt(dt: Optional[datetime]) -> str:
+    if not dt:
+        return "—"
+    return dt.strftime("%H:%M")
 
-def build_pending_message(rec: dict) -> str:
+def build_missing_message(rec: dict, plan_dt: datetime, now_dt: datetime) -> str:
     emp_name = rec.get("employeeName") or "—"
     schedule = rec.get("scheduleName") or "—"
-    plan = _format_dt(rec.get("workTimeStart"))
-    fact = _format_dt(rec.get("inMark"))
-    late = rec.get("lateIn", 0)
+    plan = _format_dt(plan_dt)
+    passed_mins = int((now_dt - plan_dt).total_seconds() / 60)
+
+    return (
+        "🚨 <b>Отсутствует на месте</b>\n\n"
+        f"👤 Сотрудник: {emp_name}\n"
+        f"📅 График: {schedule}\n"
+        f"🕐 План: {plan}\n"
+        f"🕑 Факт: Нет отметки\n"
+        f"⏱ Прошло с начала смены: <b>{passed_mins} мин.</b>\n\n"
+        "📋 Статус: ожидает отбивки"
+    )
+
+def build_late_message(rec: dict, plan_dt: datetime, fact_dt: datetime, late_mins: int) -> str:
+    emp_name = rec.get("employeeName") or "—"
+    schedule = rec.get("scheduleName") or "—"
+    plan = _format_dt(plan_dt)
+    fact = _format_dt(fact_dt)
     location = rec.get("inLocationName") or rec.get("locationName") or "—"
 
     return (
-        "⏰ <b>Опоздание сотрудника</b>\n\n"
+        "⏰ <b>Фактическое опоздание</b>\n\n"
         f"👤 Сотрудник: {emp_name}\n"
         f"📅 График: {schedule}\n"
         f"🕐 План: {plan}\n"
         f"🕑 Факт: {fact}\n"
-        f"⏱ Опоздание: <b>{late} мин.</b>\n"
+        f"⏱ Опоздание: <b>{late_mins} мин.</b>\n"
         f"📍 Локация: {location}\n\n"
         "📋 Статус: ожидает отбивки"
     )
-
 
 async def poll_workpace() -> dict:
     threshold = settings.late_threshold_minutes
@@ -80,57 +94,70 @@ async def poll_workpace() -> dict:
         return {"ok": False, "error": str(exc)}
 
     fetched = len(records)
-    late_found = 0
+    events_found = 0
     sent = 0
 
+    chats = chat_service.get_all_chats()
+    if not chats:
+        logger.warning("No chat IDs configured!")
+        return {"ok": True, "fetched": fetched, "sent": 0}
+
     for rec in records:
-        late_in = rec.get("lateIn") or 0
-        in_mark = rec.get("inMark")
         emp_id = rec.get("employeeExternalId") or rec.get("employeeId")
-
-        if late_in < threshold or not in_mark or not emp_id:
+        if not emp_id:
             continue
 
-        late_found += 1
+        date_str = rec.get("date", "")
+        work_time_start_str = rec.get("workTimeStart")
+        in_mark_str = rec.get("inMark")
+        late_in = rec.get("lateIn") or 0
 
-        event_key = _make_event_key(
-            emp_id=emp_id,
-            date=rec.get("date", ""),
-            start=rec.get("workTimeStart", ""),
-            in_mark=in_mark,
-            late=late_in,
-        )
-
-        if event_key in sent_events_cache:
+        plan_dt = _parse_dt(work_time_start_str)
+        if not plan_dt:
             continue
 
-        # Send to Telegram
-        text = build_pending_message(rec)
-        keyboard = {
-            "inline_keyboard": [
-                [{"text": "✅ Отбито", "callback_data": "review"}]
-            ]
-        }
-        
-        chats = chat_service.get_all_chats()
-        if not chats:
-            logger.warning("No chat IDs configured!")
-            continue
+        event_key = None
+        text = None
 
-        sent_to_any = False
-        for chat_id in chats:
-            msg_id = await telegram_client.send_message(chat_id, text, keyboard)
-            if msg_id:
-                sent_to_any = True
-                
-        if sent_to_any:
-            sent_events_cache.add(event_key)
-            sent += 1
+        # Logic: missing or late
+        if not in_mark_str:
+            # Not arrived yet
+            passed_mins = (now_local - plan_dt).total_seconds() / 60
+            if passed_mins >= 10:  # Threshold for missing
+                event_key = _make_event_key(emp_id, date_str, "missing")
+                if event_key not in sent_events_cache:
+                    text = build_missing_message(rec, plan_dt, now_local)
+        else:
+            # Arrived
+            if late_in >= threshold:
+                event_key = _make_event_key(emp_id, date_str, "late")
+                if event_key not in sent_events_cache:
+                    fact_dt = _parse_dt(in_mark_str)
+                    if fact_dt:
+                        text = build_late_message(rec, plan_dt, fact_dt, late_in)
+
+        if text and event_key:
+            events_found += 1
+            keyboard = {
+                "inline_keyboard": [
+                    [{"text": "✅ Отбито", "callback_data": "review"}]
+                ]
+            }
+            
+            sent_to_any = False
+            for chat_id in chats:
+                msg_id = await telegram_client.send_message(chat_id, text, keyboard)
+                if msg_id:
+                    sent_to_any = True
+                    
+            if sent_to_any:
+                sent_events_cache.add(event_key)
+                sent += 1
 
     return {
         "ok": True,
         "fetched": fetched,
-        "late_found": late_found,
+        "events_found": events_found,
         "sent": sent,
         "cache_size": len(sent_events_cache)
     }
