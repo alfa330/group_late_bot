@@ -1,0 +1,527 @@
+=== PAGE 1 ===
+Workpace API. v1
+1. Общая информация 2
+1.1. Тест и продакшн сервера 2
+1.2. Авторизация 3
+1.3. Обновление токена 3
+2. Сотрудники 4
+2.1. Создание сотрудников 4
+2.2. Изменение сотрудников 6
+2.3. Удаление сотрудника 7
+2.4. Получение списка сотрудников 8
+3. Часы и отметки 11
+3.1. Получение списка отметок 11
+3.2 Получение данных по сменам(TTS) сотрудников за период 13
+
+=== PAGE 2 ===
+1. Общая информация
+1.1. Тест и продакшн сервера
+Тестовый сервер:
+● GATEWAY https://api.integrations-testing.workpace.kz/
+● FRONT https://my.integrations-testing.workpace.kz/
+Продакшн сервер:
+● GATEWAY https://api.workpace.kz/
+● FRONT https://my.workpace.kz/
+Примечание: Для получения доступа к запросам пользователю, под которым
+происходит авторизация, должно быть выдано право “Интеграция с внешними
+системами”.
+
+=== PAGE 3 ===
+1.2. Авторизация
+POST api/auth/
+Request body
+{
+"login": "string",
+"password": "string"
+}
+Response body
+{
+"accessToken": "string",
+"refreshToken": "string"
+}
+1.3. Обновление токена
+POST api/auth/refresh
+Request headers: Authorization = Bearer token
+Request body
+{
+"accessToken": "string",
+"refreshToken": "string"
+}
+Response body
+{
+"accessToken": "string",
+"refreshToken": "string"
+}
+Токен доступа живёт 30 минут.
+Рефреш токен живёт 23 часа. Если в течение 23 часов не было обновлений - токен
+доступа отзовётся и его нужно будет запросить снова.
+
+=== PAGE 4 ===
+2. Сотрудники
+2.1. Создание сотрудников
+Внимание: В PUT и POST запросах должны быть переданы все поля согласно
+контракту, при их отсутствии система подставляет значения по-умолчанию для
+данного поля.
+POST /public/v1/Employee/create
+Request headers: Authorization = Bearer token
+Поля в теле запроса
+Параметр Обязательность Тип Комментарий
+employees Да array Массив сотрудников
+externalId Да string Внешний идентификатор
+сотрудника
+Длина строки: от 1 до 100
+символов
+departmentName Да string Наименование отдела
+Длина строки: от 1 до 100
+символов
+firstName Да string Имя сотрудника
+Длина строки: от 1 до 50 символов
+lastName Да string Фамилия сотрудника
+Длина строки: от 1 до 50 символов
+middleName Нет string Отчество сотрудника
+Длина строки: от 1 до 50 символов
+phone Нет string Телефон
+Длина строки: от 1 до 15 символов
+email Нет string Email
+Длина строки: от 1 до 192
+символов в формате email
+iin Нет string ИИН
+Длина строки: 12 символов
+positionName Нет string Должность сотрудника
+Длина строки: 1-100 символов
+dateOfBirth Нет date День рождения сотрудника
+Пример: 1991-01-01
+
+=== PAGE 5 ===
+Request body (Создание сотрудника)
+{
+"employees": [
+{
+"externalId": "",
+"departmentName": "",
+"firstName": "",
+"lastName": "",
+"middleName": "",
+"phone": "",
+"email": "",
+"iin": "",
+"positionName" : "",
+"dateOfBirth" : ""
+}
+]
+}
+Response
+При успешном запросе: 204 No Content
+
+=== PAGE 6 ===
+2.2. Изменение сотрудников
+Внимание: В PUT и POST запросах должны быть переданы все поля согласно
+контракту, при их отсутствии система подставляет значения по-умолчанию для
+данного поля.
+PUT /public/v1/Employee/change
+Request headers: Authorization = Bearer token
+Поля в теле запроса
+Параметр Обязательность Тип Комментарий
+employees Да array Массив сотрудников
+externalId Да string Внешний идентификатор
+сотрудника
+Длина строки: от 1 до 100
+символов
+departmentName Да string Наименование отдела
+Длина строки: от 1 до 100
+символов
+firstName Да string Имя сотрудника
+Длина строки: от 1 до 50 символов
+lastName Да string Фамилия сотрудника
+Длина строки: от 1 до 50 символов
+middleName Нет string Отчество сотрудника
+Длина строки: от 1 до 50 символов
+phone Нет string Телефон сотрудника
+Длина строки: от 1 до 15 символов
+email Нет string Email сотрудника
+Длина строки: от 1 до 192
+символов в формате email
+iin Нет string ИИН сотрудника
+Длина строки: от 1 до 12 символов
+positionName Нет string Должность сотрудника
+Длина строки: 1-100 символов
+dateOfBirth Нет date День рождения сотрудника
+Пример: 1991-01-01
+Request body (Создание сотрудника)
+{
+"employees": [
+{
+"externalId": "",
+"departmentName": "",
+"firstName": "",
+
+=== PAGE 7 ===
+"lastName": "",
+"middleName": "",
+"phone": "",
+"email": "",
+"iin": "",
+"positionName" : "",
+"dateOfBirth" : ""
+}
+]
+}
+Response
+При успешном запросе: 204 No Content
+2.3. Удаление сотрудника
+DELETE public/v1/employee/{externalId}
+Request headers: Authorization = Bearer token
+Поля в URL запроса
+Параметр Обязательность Тип Комментарий
+externalId Да string Внешний идентификатор
+сотрудника
+Response
+При успешном запросе: 204 ОК
+
+=== PAGE 8 ===
+2.4. Получение списка сотрудников
+GET /public/v1/employee
+Request headers: Authorization = Bearer token
+Поля в Query запроса
+Параметр Обяз. Тип Комментарий
+filter Нет string Параметр для фильтрации сотрудников.
+Укажите в фильтре:
+● IsArchived = true, если требуется
+получить только Сотрудников в
+статусе “Удален”
+● IsArchived = false, если требуется
+получить только Сотрудников в
+статусе “Активен”
+● оставьте фильтр по IsArchived
+пустым если требуется получить
+всех сотрудников
+skip Нет integer Пропуск заданного числа элементов
+take Нет integer Возвращение заданного числа элементов
+requiretotalcount Нет boolean Укажите true, если требуется вернуть
+значение totalCount (общее количество
+элементов в системе)
+Пример:
+Запрос для получения только активных сотрудников:
+/public/v1/employee?filter=%5B%22isArchived%22,%22=%22,false%5D&requireTotalCount=true
+Запрос для получения всех сотрудников, включая удаленных:
+/public/v1/employee?requireTotalCount=true
+Поля в теле ответа
+Параметр Тип Комментарий
+id string Идентификатор сотрудника Workpace
+name object Объект, содержащий информацию о ФИО
+сотрудника
+firstName string Имя
+lastName string Фамилия
+middleName string Отчество
+firstName string Имя
+lastName string Фамилия
+
+=== PAGE 9 ===
+middleName string Отчество
+fullName string ФИО сотрудника
+email string Email
+dateOfBirth date Дата рождения
+departmentId string Идентификатор отдела сотрудника
+departmentName string Наименование отдела сотрудника
+departmentTree string Иерархия отделов сотрудника
+positionId string Идентификатор должности сотрудника
+positionName string Наименование должности сотрудника
+organizationId string Идентификатор организации
+organizationName string Наименование организации
+azureEmployee string Идентификатор распознавания
+externalId string Внешний идентификатор сотрудника
+phone string Телефон
+iin string ИИН
+createdOn datetime Дата регистрации
+isArchived boolean Статус сотрудника:
+● true = Удален
+● false = Активен
+archivedOn datetime Дата удаления
+blockAuthentication boolean Статус доступа сотрудника (для сотрудников,
+имеющих доступ в ЛК):
+● true = Заблокирован
+● false = Не заблокирован
+accessToAnyLocation boolean Доступ к локациям сотрудника:
+● true - Выбраны все локации
+● false - Выбраны локации из списка
+hasPersonalDevice boolean Наличие личного устройства у сотрудника:
+● true - Есть личное устройство
+● false - Нет личного устройства
+hasCredential boolean Наличие доступа в ЛК у сотрудников:
+● true - Есть доступ
+● false - Нет доступа
+totalCount integer Общее количество сотрудников
+
+=== PAGE 10 ===
+Response body
+{
+"data": [
+{
+"id": "string",
+"name": {
+"firstName": "string",
+"lastName": "string",
+"middleName": "string"
+},
+"firstName": "string",
+"lastName": "string",
+"middleName": "string",
+"fullName": "string",
+"email": null,
+"dateOfBirth": null,
+"departmentId": "string",
+"departmentName": "string",
+"departmentTree": "string",
+"positionId": "string",
+"positionName": "string",
+"organizationId": "string",
+"organizationName": "string",
+"azureEmployee": "",
+"externalId": null,
+"phone": null,
+"iin": null,
+"createdOn": "2024-05-11T14:34:22.477499",
+"isArchived": true,
+"archivedOn": "2024-26-12T14:34:42.619341",
+"blockAuthentication": false,
+"accessToAnyLocation": true,
+"hasPersonalDevice": false
+}
+],
+"totalCount": 1,
+"groupCount": -1,
+"summary": null
+}
+
+=== PAGE 11 ===
+3. Часы и отметки
+3.1. Получение списка отметок
+GET public/v1/mark
+Request headers: Authorization = Bearer token
+Поля в Query запроса
+Параметр Обязательность Тип Комментарий
+Start Да datetime Дата отметки с
+End Да datetime Дата отметки по
+ExternalId Нет string Внешний идентификатор
+сотрудника
+Примечание: если
+требуется получить отметки
+по всей компании оставьте
+параметр пустым
+IncludeArchivedEmployee Нет boolean Примечание: укажите true
+s если требуется получить
+отметки по уволенным
+сотрудникам
+IncludeSuspiciousMarks Нет boolean Примечание: укажите true
+если требуется получить
+подозрительные отметки
+skip Нет integer Пропуск заданного числа
+элементов
+take Нет integer Возвращение заданного
+числа элементов
+requireTotalCount Нет boolean Укажите true, если
+требуется вернуть
+значение totalCount (общее
+количество элементов в
+системе)
+
+=== PAGE 12 ===
+Поля в теле ответа
+Параметр Тип Комментарий
+name string ФИО сотрудника
+department string Отдел сотрудника
+id string Идентификатор сотрудника Workpace
+iin string ИИН сотрудника
+externalId string Внешний идентификатор сотрудника
+isDeleted boolean Статус сотрудника:
+true - сотрудник удален
+false - сотрудник не удален
+isArchived boolean Статус сотрудника:
+true - сотрудник уволен
+false - сотрудник не уволен
+type integer Тип отметки:
+0 - Приход
+1 - Уход
+date datetime Дата и время отметки
+location string Локация отметки
+schedule string График работы
+comment string Комментарий отметки
+Response body
+{
+"data": [
+{
+"name": "string",
+"department": "string",
+"id": "string",
+"iin": "string",
+"externalId": "string",
+"isArchived": false,
+"isDeleted": false,
+"type": 0,
+"date": "2024-05-26T09:08:00+05:00",
+"location": "string",
+"schedule": "string",
+"comment": "string"
+}
+],
+"totalCount": 1,
+"groupCount": 1,
+"summary": null
+}
+
+=== PAGE 13 ===
+3.2 Получение данных по сменам(TTS) сотрудников за
+период
+GET /public/v1/timetablespan
+Request headers: Authorization = Bearer token
+Поля в Query запроса
+Параметр Обяз Тип Комментарий
+.
+Start Да datetime Дата отметки с
+End Да datetime Дата отметки по
+ExternalId Нет string Внешний идентификатор сотрудника
+Примечание: если требуется получить
+отметки по всей компании оставьте
+параметр пустым
+IncludeArchivedEmployees Нет boolean Примечание: укажите true если
+требуется получить отметки по
+удаленным сотрудникам
+skip Нет integer Пропуск заданного числа элементов
+take Нет integer Возвращение заданного числа
+элементов
+requireTotalCount Нет boolean Укажите true, если требуется вернуть
+значение totalCount (общее количество
+элементов в системе)
+Поля в теле ответа
+Параметр Тип Комментарий
+date date Дата расписания
+dayType integer Тип дня:
+● 0 - если расписание относится к
+гибкому графику
+● 1 - если тип дня "Рабочий"
+● 2 - если тип дня "Выходной"
+employeeId string Идентификатор сотрудника Workpace
+employeeName string ФИО сотрудника
+employeeExternalId string Внешний идентификатор сотрудника
+employeeIsArchived string Статус сотрудника:
+● false - если сотрудник уволен (с
+возможностью восстановить)
+● true - если сотрудник активен
+
+=== PAGE 14 ===
+employeeIsDeleted string Статус сотрудника:
+● false - если сотрудник удален
+● true - если сотрудник не удален
+scheduleName string Наименование графика работы
+inMark dateTime Самая ранняя отметка прихода
+outMark dateTime Самая поздняя отметка ухода
+inLocationName string Локация самой ранней отметки прихода
+outLocationName string Локация самой поздней отметки ухода
+workTimeStart datetime Начало рабочего времени
+workTimeEnd datetime Окончание рабочего времени
+boundaryInStart datetime Границы начала принятия отметок
+прихода
+boundaryInEnd datetime Границы окончания принятия прихода
+отметок
+boundaryOutStart datetime Границы начала принятия ухода отметок
+boundaryOutEnd datetime Границы окончания принятия отметок
+ухода
+locationName string Наименование локации из графика
+работы
+workTimeDurationWithoutBreaks integer Рабочее время в минутах (по графику)
+без учета перерыва
+breaksDuration integer Длительность перерыва в минутах (по
+графику)
+inCount integer Количество отметок прихода
+outCount integer Количество отметок ухода
+earlyIn integer Ранний приход (Продолжительность
+времени от фактического прихода до
+планируемого прихода в минутах)
+earlyOut integer Ранний уход (Продолжительность
+времени от фактического ухода до
+планируемого ухода в минутах)
+lateIn integer Поздний приход (Продолжительность
+времени от планируемого прихода до
+фактического прихода в минутах)
+lateOut integer Поздний уход (Продолжительность
+времени от планируемого ухода до
+фактического ухода в минутах)
+presence integer Отработанное время в минутах
+
+=== PAGE 15 ===
+workTimePresence integer Отработанное время в минутах по
+графику, включая присутствие во время
+перерыва
+workTimePresenceOutsideBreak integer Отработанное время в минутах по
+графику, исключая присутствие во время
+перерыва
+workTimePresenceInsideBreak integer Отработанное время в минутах по
+графику во время перерыва
+deficiency integer Недоработки в минутах без учета
+графика
+workTimeDeficiency integer Недоработки в минутах в рабочее время,
+включая присутствие в перерывы
+workTimeDeficiencyOutsideBreak integer Недоработки в минутах в рабочее время,
+исключая присутствие в перерывы
+overtime integer Переработки в минутах без учета
+графика
+workTimeOvertime integer Переработки в минутах в рабочее время,
+включая присутствие в перерывы
+workTimeOvertimeWithoutBreaks integer Переработки в минутах в рабочее время,
+исключая присутствие в перерывы
+workTimeAbsence integer Отсутствие в рабочее время, включая
+отсутствие во время перерывов
+workTimeAbsenceOutsideBreak integer Отсутствие в рабочее время, исключая
+отсутствие во время перерывов
+workTimeAbsenceInsideBreak integer Отсутствие в рабочее время во время
+перерывов
+Response body
+"data":[
+{
+"date": "2024-05-04",
+"dayType": 0,
+"employeeId": "string",
+"employeeName": "string",
+"employeeExternalId": "string",
+"employeeIsArchived": true,
+"employeeIsDeleted": false,
+"scheduleName": "string",
+"inMark": "2024-05-04T08:21:17.808Z",
+"outMark": "2024-05-04T18:21:17.808Z",
+"inLocationName": "string",
+"outLocationName": "string",
+"workTimeStart": "2024-05-04T09:00:00.808Z",
+"workTimeEnd": "2024-05-04T19:00:00.808Z",
+"boundaryInStart": "2024-05-04T04:00:00.808Z",
+"boundaryInEnd": "2024-05-04T11:00:00.808Z",
+"boundaryOutStart": "2024-05-04T16:00:00.808Z",
+
+=== PAGE 16 ===
+"boundaryOutEnd": "2024-05-04T22:00:00.808Z",
+"locationName": "string",
+"workTimeDurationWithoutBreaks": 0,
+"breaksDuration": 0,
+"inCount": 0,
+"outCount": 0,
+"earlyIn": 0,
+"earlyOut": 0,
+"lateIn": 0,
+"lateOut": 0,
+"presence": 0,
+"workTimePresence": 0,
+"workTimePresenceOutsideBreak": 0,
+"workTimePresenceInsideBreak": 0,
+"deficiency": 0,
+"workTimeDeficiency": 0,
+"workTimeDeficiencyOutsideBreak": 0,
+"overtime": 0,
+"workTimeOvertime": 0,
+"workTimeOvertimeWithoutBreaks": 0,
+"workTimeAbsence": 0,
+"workTimeAbsenceOutsideBreak": 0,
+"workTimeAbsenceInsideBreak": 0
+}
+],
+"totalCount": 1,
+"groupCount": 1,
+"summary": null
