@@ -8,6 +8,7 @@ import pytz
 from app.config import settings
 from app.telegram_client import telegram_client
 from app.workpace_client import workpace_client
+from app.services.chat_service import chat_service
 
 logger = logging.getLogger(__name__)
 TZ = pytz.timezone(settings.timezone)
@@ -111,13 +112,18 @@ async def poll_workpace() -> dict:
             ]
         }
         
-        chat_id = settings.default_telegram_chat_id
-        if not chat_id:
-            logger.warning("DEFAULT_TELEGRAM_CHAT_ID is not set!")
+        chats = chat_service.get_all_chats()
+        if not chats:
+            logger.warning("No chat IDs configured!")
             continue
 
-        msg_id = await telegram_client.send_message(chat_id, text, keyboard)
-        if msg_id:
+        sent_to_any = False
+        for chat_id in chats:
+            msg_id = await telegram_client.send_message(chat_id, text, keyboard)
+            if msg_id:
+                sent_to_any = True
+                
+        if sent_to_any:
             sent_events_cache.add(event_key)
             sent += 1
 
