@@ -9,6 +9,7 @@ from app.config import settings
 from app.telegram_client import telegram_client
 from app.workpace_client import workpace_client
 from app.services.chat_service import chat_service
+from app.services.mute_service import mute_service
 
 logger = logging.getLogger(__name__)
 TZ = pytz.timezone(settings.timezone)
@@ -175,6 +176,11 @@ async def poll_workpace() -> dict:
         if not emp_id:
             continue
 
+        emp_name = rec.get("employeeName") or "—"
+        dept_name = rec.get("departmentName") or rec.get("scheduleName") or "Без отдела"
+        if mute_service.is_user_muted(emp_name) or mute_service.is_dept_muted(dept_name):
+            continue
+
         date_str = rec.get("date", "")
         work_time_start_str = rec.get("workTimeStart")
         in_mark_str = rec.get("inMark")
@@ -255,6 +261,11 @@ async def poll_workpace() -> dict:
             emp_id = mark.get("employeeId")
             mark_id = mark.get("id")
             if not emp_id or not mark_id:
+                continue
+
+            emp_name = mark.get("employeeName") or "—"
+            dept_name = mark.get("departmentName") or "Без отдела"
+            if mute_service.is_user_muted(emp_name) or mute_service.is_dept_muted(dept_name):
                 continue
             mark_date_str = mark.get("markDate", "")[:10]
             event_key = _make_event_key(emp_id, mark_date_str, f"suspicious_{mark_id}")

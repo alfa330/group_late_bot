@@ -6,6 +6,7 @@ from fastapi import APIRouter, Request
 from app.config import settings
 from app.telegram_client import telegram_client
 from app.services.chat_service import chat_service
+from app.services.mute_service import mute_service
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -97,7 +98,12 @@ async def telegram_webhook(secret: str, request: Request):
                 "<b>Администратор может использовать команды:</b>\n"
                 "• <code>/addchat [id]</code> — добавить чат в список рассылки\n"
                 "• <code>/delchat [id]</code> — удалить чат из списка рассылки\n"
-                "• <code>/chats</code> — список разрешенных чатов"
+                "• <code>/chats</code> — список разрешенных чатов\n"
+                "• <code>/mute_user [ФИО]</code> — отключить отбивки по сотруднику\n"
+                "• <code>/unmute_user [ФИО]</code> — включить отбивки по сотруднику\n"
+                "• <code>/mute_dept [Отдел]</code> — отключить отбивки по отделу\n"
+                "• <code>/unmute_dept [Отдел]</code> — включить отбивки по отделу\n"
+                "• <code>/muted</code> — список отключенных отбивок"
             )
         elif text.startswith("/help"):
             help_text = (
@@ -115,6 +121,12 @@ async def telegram_webhook(secret: str, request: Request):
                 "• <code>/report YYYY-MM-DD [Отдел]</code> — за дату по отделу\n"
                 "• <code>/report YYYY-MM-DD YYYY-MM-DD</code> — за период по всем отделам\n"
                 "• <code>/report YYYY-MM-DD YYYY-MM-DD [Отдел]</code> — за период по отделу\n\n"
+                "⚙️ <b>Управление отбивками (только для администратора):</b>\n"
+                "• <code>/mute_user [ФИО]</code> — временно отключить отбивки для сотрудника\n"
+                "• <code>/unmute_user [ФИО]</code> — включить обратно отбивки для сотрудника\n"
+                "• <code>/mute_dept [Отдел]</code> — временно отключить отбивки для всего отдела\n"
+                "• <code>/unmute_dept [Отдел]</code> — включить обратно отбивки для отдела\n"
+                "• <code>/muted</code> — посмотреть список отключенных сотрудников и отделов\n\n"
                 "<i>*Пример: <code>/report 2026-05-18 2026-05-20 Контакт-центр</code></i>"
             )
             await telegram_client.send_message(chat_id, help_text)
@@ -174,6 +186,92 @@ async def telegram_webhook(secret: str, request: Request):
             chats_str = "\n".join([f"<code>{c}</code>" for c in all_chats])
             await telegram_client.send_message(chat_id, f"📋 <b>Список чатов для рассылки:</b>\n{chats_str}")
             
+        elif text.startswith("/mute_user"):
+            if not is_admin:
+                await telegram_client.send_message(chat_id, "❌ Нет прав.")
+                return {"ok": True}
+
+            parts = text.split(maxsplit=1)
+            if len(parts) == 2:
+                target_user = parts[1].strip()
+                if mute_service.mute_user(target_user):
+                    await telegram_client.send_message(chat_id, f"🔇 Уведомления для пользователя <b>{target_user}</b> успешно отключены.")
+                else:
+                    await telegram_client.send_message(chat_id, f"ℹ️ Пользователь <b>{target_user}</b> уже находится в списке отключенных.")
+            else:
+                await telegram_client.send_message(chat_id, "Использование: /mute_user [ФИО сотрудника]")
+
+        elif text.startswith("/unmute_user"):
+            if not is_admin:
+                await telegram_client.send_message(chat_id, "❌ Нет прав.")
+                return {"ok": True}
+
+            parts = text.split(maxsplit=1)
+            if len(parts) == 2:
+                target_user = parts[1].strip()
+                if mute_service.unmute_user(target_user):
+                    await telegram_client.send_message(chat_id, f"🔊 Уведомления для пользователя <b>{target_user}</b> снова включены.")
+                else:
+                    await telegram_client.send_message(chat_id, f"❌ Пользователь <b>{target_user}</b> не найден в списке отключенных.")
+            else:
+                await telegram_client.send_message(chat_id, "Использование: /unmute_user [ФИО сотрудника]")
+
+        elif text.startswith("/mute_dept"):
+            if not is_admin:
+                await telegram_client.send_message(chat_id, "❌ Нет прав.")
+                return {"ok": True}
+
+            parts = text.split(maxsplit=1)
+            if len(parts) == 2:
+                target_dept = parts[1].strip()
+                if mute_service.mute_dept(target_dept):
+                    await telegram_client.send_message(chat_id, f"🔇 Уведомления для отдела <b>{target_dept}</b> успешно отключены.")
+                else:
+                    await telegram_client.send_message(chat_id, f"ℹ️ Отдел <b>{target_dept}</b> уже находится в списке отключенных.")
+            else:
+                await telegram_client.send_message(chat_id, "Использование: /mute_dept [Название отдела]")
+
+        elif text.startswith("/unmute_dept"):
+            if not is_admin:
+                await telegram_client.send_message(chat_id, "❌ Нет прав.")
+                return {"ok": True}
+
+            parts = text.split(maxsplit=1)
+            if len(parts) == 2:
+                target_dept = parts[1].strip()
+                if mute_service.unmute_dept(target_dept):
+                    await telegram_client.send_message(chat_id, f"🔊 Уведомления для отдела <b>{target_dept}</b> снова включены.")
+                else:
+                    await telegram_client.send_message(chat_id, f"❌ Отдел <b>{target_dept}</b> не найден в списке отключенных.")
+            else:
+                await telegram_client.send_message(chat_id, "Использование: /unmute_dept [Название отдела]")
+
+        elif text.startswith("/muted") or text.startswith("/mutes"):
+            if not is_admin:
+                await telegram_client.send_message(chat_id, "❌ Нет прав.")
+                return {"ok": True}
+
+            muted_users = mute_service.get_muted_users()
+            muted_depts = mute_service.get_muted_depts()
+
+            response_parts = ["📋 <b>Список отключенных уведомлений:</b>\n"]
+
+            response_parts.append("👤 <b>Сотрудники:</b>")
+            if muted_users:
+                for u in muted_users:
+                    response_parts.append(f"• <code>{u}</code>")
+            else:
+                response_parts.append("<i>список пуст</i>")
+
+            response_parts.append("\n🏢 <b>Отделы:</b>")
+            if muted_depts:
+                for d in muted_depts:
+                    response_parts.append(f"• <code>{d}</code>")
+            else:
+                response_parts.append("<i>список пуст</i>")
+
+            await telegram_client.send_message(chat_id, "\n".join(response_parts))
+
         elif text.startswith("/report"):
             all_chats = chat_service.get_all_chats()
             if chat_id not in all_chats and not is_admin:
