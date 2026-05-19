@@ -62,6 +62,8 @@ async def generate_report(date_str: str) -> Tuple[Optional[bytes], str, str]:
     emp_data = {}
 
     for rec in records:
+        if rec.get("employeeIsArchived") is True or str(rec.get("employeeIsArchived")).lower() == "true":
+            continue
         emp_id = rec.get("employeeExternalId") or rec.get("employeeId")
         if not emp_id:
             continue
@@ -79,6 +81,8 @@ async def generate_report(date_str: str) -> Tuple[Optional[bytes], str, str]:
                 emp_data[emp_id]["dept"] = rec["departmentName"]
 
     for m in marks:
+        if m.get("employeeIsArchived") is True or str(m.get("employeeIsArchived")).lower() == "true":
+            continue
         emp_id = m.get("employeeId")
         if not emp_id:
             continue

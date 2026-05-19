@@ -1,4 +1,5 @@
 import logging
+import time
 
 from fastapi import APIRouter, Request
 
@@ -8,6 +9,18 @@ from app.services.chat_service import chat_service
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+PROCESSED_UPDATES = set()
+
+def _deduplicate_update(update_id: int) -> bool:
+    if not update_id:
+        return False
+    if update_id in PROCESSED_UPDATES:
+        return True
+    if len(PROCESSED_UPDATES) > 2000:
+        PROCESSED_UPDATES.clear()
+    PROCESSED_UPDATES.add(update_id)
+    return False
 
 
 @router.post("/telegram/webhook/{secret}")
@@ -19,6 +32,11 @@ async def telegram_webhook(secret: str, request: Request):
         body = await request.json()
     except Exception:
         return {"ok": False}
+
+    update_id = body.get("update_id")
+    if update_id and _deduplicate_update(update_id):
+        logger.info("Duplicate Telegram webhook update %s ignored.", update_id)
+        return {"ok": True}
 
     if "callback_query" in body:
         cq = body["callback_query"]
@@ -51,6 +69,14 @@ async def telegram_webhook(secret: str, request: Request):
 
     if "message" in body:
         msg = body["message"]
+        
+        # Ignore old messages from Telegram queue (older than 60 seconds)
+        msg_date = msg.get("date", 0)
+        current_time = time.time()
+        if msg_date > 0 and (current_time - msg_date) > 60:
+            logger.info("Ignoring old Telegram message: sent %s seconds ago.", int(current_time - msg_date))
+            return {"ok": True}
+
         chat = msg.get("chat", {})
         chat_id = str(chat.get("id", ""))
         text = msg.get("text", "").strip()
