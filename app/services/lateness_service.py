@@ -21,6 +21,40 @@ def _make_event_key(emp_id: str, date: str, event_type: str) -> str:
     raw = f"{emp_id}:{date}:{event_type}"
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
+
+def _to_int(value) -> int:
+    try:
+        return int(float(value or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _employee_keys(item: dict) -> set[str]:
+    keys = set()
+    for field in ("employeeId", "employeeExternalId"):
+        value = item.get(field)
+        if value:
+            keys.add(str(value))
+    return keys
+
+
+def _get_raw_marks_for_employee(emp_raw_marks: dict[str, list[dict]], rec: dict) -> list[dict]:
+    marks = []
+    seen = set()
+    for key in _employee_keys(rec):
+        for mark in emp_raw_marks.get(key, []):
+            mark_key = mark.get("id") or mark.get("markDate") or id(mark)
+            if mark_key in seen:
+                continue
+            seen.add(mark_key)
+            marks.append(mark)
+    return marks
+
+
+def _calc_late_minutes(plan_dt: datetime, fact_dt: datetime) -> int:
+    return max(0, int((fact_dt - plan_dt).total_seconds() / 60))
+
+
 def _parse_dt(dt_str: Optional[str]) -> Optional[datetime]:
     if not dt_str:
         return None
@@ -163,8 +197,7 @@ async def poll_workpace() -> dict:
     # Group raw marks by employeeId for easy lookup
     emp_raw_marks = {}
     for m in marks:
-        eid = m.get("employeeId")
-        if eid:
+        for eid in _employee_keys(m):
             if eid not in emp_raw_marks:
                 emp_raw_marks[eid] = []
             emp_raw_marks[eid].append(m)
@@ -184,24 +217,25 @@ async def poll_workpace() -> dict:
         date_str = rec.get("date", "")
         work_time_start_str = rec.get("workTimeStart")
         in_mark_str = rec.get("inMark")
-        late_in = rec.get("lateIn") or 0
+        late_in = _to_int(rec.get("lateIn"))
 
         plan_dt = _parse_dt(work_time_start_str)
         if not plan_dt:
             continue
+        if not date_str:
+            date_str = plan_dt.strftime("%Y-%m-%d")
 
-        # Fallback to raw check-in marks if in_mark_str is missing in timetablespan
-        if not in_mark_str:
-            raw_ins = [m for m in emp_raw_marks.get(emp_id, []) if m.get("markType") == 0]
+        fact_in_dt = _parse_dt(in_mark_str)
+        # Fallback to raw check-in marks if timetablespan has no usable inMark yet.
+        if not fact_in_dt:
+            raw_ins = [m for m in _get_raw_marks_for_employee(emp_raw_marks, rec) if m.get("markType") == 0]
             if raw_ins:
                 raw_ins.sort(key=lambda x: x.get("markDate", ""))
                 in_mark_str = raw_ins[0].get("markDate")
-                
-                # Recalculate late_in minutes
                 fact_in_dt = _parse_dt(in_mark_str)
-                if fact_in_dt:
-                    diff_mins = (fact_in_dt - plan_dt).total_seconds() / 60
-                    late_in = max(0, int(diff_mins))
+
+        if fact_in_dt:
+            late_in = max(late_in, _calc_late_minutes(plan_dt, fact_in_dt))
 
         # Logic: missing or late
         if not in_mark_str:
@@ -217,9 +251,8 @@ async def poll_workpace() -> dict:
             if late_in >= threshold:
                 event_key = _make_event_key(emp_id, date_str, "late")
                 if event_key not in sent_events_cache:
-                    fact_dt = _parse_dt(in_mark_str)
-                    if fact_dt:
-                        text = build_late_message(rec, plan_dt, fact_dt, late_in)
+                    if fact_in_dt:
+                        text = build_late_message(rec, plan_dt, fact_in_dt, late_in)
                         events_to_send.append((event_key, text, emp_name, dept_name))
 
             # Early departure / Missing out mark
@@ -227,9 +260,9 @@ async def poll_workpace() -> dict:
             plan_end_dt = _parse_dt(rec.get("workTimeEnd"))
             
             # Fallback to raw check-out marks if out_mark_str is missing in timetablespan
-            early_out = rec.get("earlyOut") or 0
+            early_out = _to_int(rec.get("earlyOut"))
             if in_mark_str and plan_end_dt and not out_mark_str:
-                raw_outs = [m for m in emp_raw_marks.get(emp_id, []) if m.get("markType") == 1]
+                raw_outs = [m for m in _get_raw_marks_for_employee(emp_raw_marks, rec) if m.get("markType") == 1]
                 if raw_outs:
                     raw_outs.sort(key=lambda x: x.get("markDate", ""))
                     out_mark_str = raw_outs[-1].get("markDate")
