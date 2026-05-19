@@ -160,18 +160,50 @@ async def telegram_webhook(secret: str, request: Request):
                 await telegram_client.send_message(chat_id, "❌ Этот чат не зарегистрирован в системе рассылки.")
                 return {"ok": True}
                 
-            parts = text.split(maxsplit=1)
+            parts = text.split()
+            args = parts[1:]
+            
             from datetime import datetime
             import pytz
+            import re
             TZ = pytz.timezone(settings.timezone)
-            target_date_str = datetime.now(TZ).strftime("%Y-%m-%d")
+            today_str = datetime.now(TZ).strftime("%Y-%m-%d")
             
-            if len(parts) == 2:
-                target_date_str = parts[1].strip()
+            start_date_str = today_str
+            end_date_str = None
+            dept_filter = None
+            
+            def is_date(s):
+                return bool(re.match(r"^\d{4}-\d{2}-\d{2}$", s))
+            
+            if len(args) == 1:
+                if is_date(args[0]):
+                    start_date_str = args[0]
+                else:
+                    dept_filter = args[0]
+            elif len(args) == 2:
+                if is_date(args[0]) and is_date(args[1]):
+                    start_date_str = args[0]
+                    end_date_str = args[1]
+                elif is_date(args[0]):
+                    start_date_str = args[0]
+                    dept_filter = args[1]
+                else:
+                    dept_filter = " ".join(args)
+            elif len(args) >= 3:
+                if is_date(args[0]) and is_date(args[1]):
+                    start_date_str = args[0]
+                    end_date_str = args[1]
+                    dept_filter = " ".join(args[2:])
+                elif is_date(args[0]):
+                    start_date_str = args[0]
+                    dept_filter = " ".join(args[1:])
+                else:
+                    dept_filter = " ".join(args)
                 
             await telegram_client.send_message(chat_id, "⏳ <i>Генерирую Excel-отчет, пожалуйста подождите...</i>")
             from app.services.report_service import generate_report
-            file_bytes, filename, report_text = await generate_report(target_date_str)
+            file_bytes, filename, report_text = await generate_report(start_date_str, end_date_str, dept_filter)
             
             if file_bytes:
                 await telegram_client.send_document(chat_id, file_bytes, filename, report_text)
