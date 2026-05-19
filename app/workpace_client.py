@@ -148,6 +148,70 @@ class WorkpaceClient:
         )
         return all_records
 
+    # ------------------------------------------------------------------ mark
+
+    async def get_domain_mark(
+        self,
+        start: datetime,
+        end: datetime,
+        skip: int = 0,
+        take: int = 100,
+    ) -> dict:
+        """Single page request to /domain-api/mark using DevExtreme filters."""
+        import json
+        token = await self.get_valid_access_token()
+        url = f"{self.base_url}/domain-api/mark"
+        
+        # DevExtreme filter format
+        filter_arr = [
+            ["markDate", ">=", start.isoformat()],
+            "and",
+            ["markDate", "<=", end.isoformat()]
+        ]
+        
+        params = {
+            "filter": json.dumps(filter_arr),
+            "requireTotalCount": "true",
+            "skip": skip,
+            "take": take,
+        }
+
+        headers = {"Authorization": f"Bearer {token}"}
+        async with httpx.AsyncClient(timeout=60) as client:
+            resp = await client.get(url, params=params, headers=headers)
+            resp.raise_for_status()
+            return resp.json()
+
+    async def get_all_domain_marks(
+        self, start: datetime, end: datetime, take: int = 100
+    ) -> list[dict]:
+        """Paginate through /domain-api/mark records."""
+        all_records: list[dict] = []
+        skip = 0
+        total_count: Optional[int] = None
+
+        while True:
+            data = await self.get_domain_mark(start, end, skip=skip, take=take)
+            records = data.get("data", [])
+            all_records.extend(records)
+
+            if total_count is None:
+                total_count = data.get("totalCount")
+
+            skip += len(records)
+
+            if not records:
+                break
+            if total_count is not None and skip >= total_count:
+                break
+
+        logger.info(
+            "Fetched %d domain mark records (totalCount=%s)",
+            len(all_records),
+            total_count,
+        )
+        return all_records
+
 
 # Singleton instance shared across the app
 workpace_client = WorkpaceClient()

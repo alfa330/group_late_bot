@@ -117,6 +117,26 @@ def build_missing_out_message(rec: dict, plan_end_dt: datetime, now_dt: datetime
         "📋 Статус: ожидает отбивки"
     )
 
+def build_suspicious_mark_message(mark: dict) -> str:
+    emp_name = mark.get("employeeName") or "—"
+    dept = mark.get("departmentName") or "—"
+    mark_dt = _parse_dt(mark.get("markDate"))
+    fact = _format_dt(mark_dt)
+    
+    mtype_val = mark.get("markType")
+    mtype = "Вход" if mtype_val == 0 else "Выход" if mtype_val == 1 else "—"
+    device = mark.get("deviceName") or "—"
+
+    return (
+        "⚠️ <b>Подозрительная отметка</b>\n\n"
+        f"👤 Сотрудник: {emp_name}\n"
+        f"🏢 Отдел: {dept}\n"
+        f"🕒 Время: {fact}\n"
+        f"🔄 Тип: {mtype}\n"
+        f"📱 Устройство: {device}\n\n"
+        "📋 Статус: ожидает отбивки"
+    )
+
 async def poll_workpace() -> dict:
     threshold = settings.late_threshold_minutes
     now_local = datetime.now(TZ)
@@ -125,6 +145,7 @@ async def poll_workpace() -> dict:
 
     try:
         records = await workpace_client.get_all_timetable_spans(start_local, end_local)
+        marks = await workpace_client.get_all_domain_marks(start_local, end_local)
     except Exception as exc:
         logger.error("Workpace API error: %s", exc)
         return {"ok": False, "error": str(exc)}
@@ -137,6 +158,8 @@ async def poll_workpace() -> dict:
     if not chats:
         logger.warning("No chat IDs configured!")
         return {"ok": True, "fetched": fetched, "sent": 0}
+
+    events_to_send = []
 
     for rec in records:
         emp_id = rec.get("employeeExternalId") or rec.get("employeeId")
@@ -151,8 +174,6 @@ async def poll_workpace() -> dict:
         plan_dt = _parse_dt(work_time_start_str)
         if not plan_dt:
             continue
-
-        events_to_send = []
 
         # Logic: missing or late
         if not in_mark_str:
@@ -194,23 +215,35 @@ async def poll_workpace() -> dict:
                         missing_out_text = build_missing_out_message(rec, plan_end_dt, now_local)
                         events_to_send.append((missing_out_key, missing_out_text))
 
-        for event_key, text in events_to_send:
-            events_found += 1
-            keyboard = {
-                "inline_keyboard": [
-                    [{"text": "✅ Отбито", "callback_data": "review"}]
-                ]
-            }
-            
-            sent_to_any = False
-            for chat_id in chats:
-                msg_id = await telegram_client.send_message(chat_id, text, keyboard)
-                if msg_id:
-                    sent_to_any = True
-                    
-            if sent_to_any:
-                sent_events_cache.add(event_key)
-                sent += 1
+    for mark in marks:
+        if mark.get("status") == 0:
+            emp_id = mark.get("employeeId")
+            mark_id = mark.get("id")
+            if not emp_id or not mark_id:
+                continue
+            mark_date_str = mark.get("markDate", "")[:10]
+            event_key = _make_event_key(emp_id, mark_date_str, f"suspicious_{mark_id}")
+            if event_key not in sent_events_cache:
+                text = build_suspicious_mark_message(mark)
+                events_to_send.append((event_key, text))
+
+    for event_key, text in events_to_send:
+        events_found += 1
+        keyboard = {
+            "inline_keyboard": [
+                [{"text": "✅ Отбито", "callback_data": "review"}]
+            ]
+        }
+        
+        sent_to_any = False
+        for chat_id in chats:
+            msg_id = await telegram_client.send_message(chat_id, text, keyboard)
+            if msg_id:
+                sent_to_any = True
+                
+        if sent_to_any:
+            sent_events_cache.add(event_key)
+            sent += 1
 
     return {
         "ok": True,
