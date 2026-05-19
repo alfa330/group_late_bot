@@ -143,9 +143,13 @@ async def telegram_webhook(secret: str, request: Request):
             if len(parts) == 2:
                 target_date_str = parts[1].strip()
                 
-            await telegram_client.send_message(chat_id, "⏳ <i>Генерирую отчет, пожалуйста подождите...</i>")
+            await telegram_client.send_message(chat_id, "⏳ <i>Генерирую Excel-отчет, пожалуйста подождите...</i>")
             from app.services.report_service import generate_report
-            report_text = await generate_report(target_date_str)
-            await telegram_client.send_message(chat_id, report_text)
+            file_bytes, filename, report_text = await generate_report(target_date_str)
+            
+            if file_bytes:
+                await telegram_client.send_document(chat_id, file_bytes, filename, report_text)
+            else:
+                await telegram_client.send_message(chat_id, report_text)
 
     return {"ok": True}

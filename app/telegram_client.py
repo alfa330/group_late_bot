@@ -37,6 +37,27 @@ class TelegramClient:
             logger.error("Failed to send message to %s: %s", chat_id, exc)
             return None
 
+    async def send_document(self, chat_id: str, file_bytes: bytes, filename: str, caption: Optional[str] = None) -> Optional[str]:
+        url = f"{TELEGRAM_API}/sendDocument"
+        data = {"chat_id": chat_id}
+        if caption:
+            data["caption"] = caption
+            data["parse_mode"] = "HTML"
+        files = {"document": (filename, file_bytes, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")}
+        
+        try:
+            async with httpx.AsyncClient(timeout=30) as client:
+                resp = await client.post(url, data=data, files=files)
+            if resp.status_code != 200:
+                logger.error("Telegram sendDocument failed %s: %s", resp.status_code, resp.text)
+                resp.raise_for_status()
+            result = resp.json()
+            msg_id = str(result["result"]["message_id"])
+            return msg_id
+        except Exception as exc:
+            logger.error("Failed to send document to %s: %s", chat_id, exc)
+            return None
+
     async def edit_message_text(self, chat_id: str, message_id: str, text: str) -> bool:
         payload = {
             "chat_id": chat_id,
