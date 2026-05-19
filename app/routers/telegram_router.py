@@ -64,10 +64,13 @@ async def telegram_webhook(secret: str, request: Request):
                 chat_id,
                 "👋 Привет! Я бот для отбивки опозданий.\n"
                 f"Твой Chat ID: <code>{chat_id}</code>\n\n"
-                "Администратор может использовать команды:\n"
-                "/addchat [id] — добавить чат\n"
-                "/delchat [id] — удалить чат\n"
-                "/chats — список чатов"
+                "<b>Доступные команды:</b>\n"
+                "• <code>/report</code> — получить отчет за сегодня\n"
+                "• <code>/report ГГГГ-ММ-ДД</code> — получить отчет за указанную дату (например: <code>/report 2026-05-18</code>)\n\n"
+                "<b>Администратор может использовать команды:</b>\n"
+                "• <code>/addchat [id]</code> — добавить чат в список рассылки\n"
+                "• <code>/delchat [id]</code> — удалить чат из списка рассылки\n"
+                "• <code>/chats</code> — список разрешенных чатов"
             )
         elif text.startswith("/addchat"):
             if not is_admin:
@@ -77,10 +80,27 @@ async def telegram_webhook(secret: str, request: Request):
             parts = text.split(maxsplit=1)
             if len(parts) == 2:
                 target_id = parts[1].strip()
-                if chat_service.add_chat(target_id):
-                    await telegram_client.send_message(chat_id, f"✅ Чат {target_id} успешно добавлен в список рассылки.")
-                else:
-                    await telegram_client.send_message(chat_id, f"ℹ️ Чат {target_id} уже есть в списке.")
+                
+                # Proactively send welcome message to verify connectivity
+                welcome_text = (
+                    "🎉 <b>Этот чат успешно добавлен в список рассылки бота Workpace!</b>\n\n"
+                    "Теперь сюда будут приходить уведомления о нарушениях.\n\n"
+                    "<b>Доступные команды для всех участников:</b>\n"
+                    "• <code>/report</code> — получить отчет за сегодня\n"
+                    "• <code>/report ГГГГ-ММ-ДД</code> — получить отчет за указанную дату (например: <code>/report 2026-05-18</code>)"
+                )
+                try:
+                    msg_id = await telegram_client.send_message(target_id, welcome_text)
+                    if msg_id:
+                        if chat_service.add_chat(target_id):
+                            await telegram_client.send_message(chat_id, f"✅ Чат {target_id} успешно добавлен в список рассылки. Приветственное сообщение отправлено!")
+                        else:
+                            await telegram_client.send_message(chat_id, f"ℹ️ Чат {target_id} уже есть в списке. Приветственное сообщение отправлено повторно!")
+                    else:
+                        await telegram_client.send_message(chat_id, f"❌ Безуспешно. Бот не смог отправить сообщение в чат {target_id}. Проверьте, что бот состоит в этом чате и имеет права на отправку.")
+                except Exception as exc:
+                    logger.error("Failed to add chat %s: %s", target_id, exc)
+                    await telegram_client.send_message(chat_id, f"❌ Безуспешно. Не удалось написать в чат {target_id}.\nОшибка: <code>{exc}</code>")
             else:
                 await telegram_client.send_message(chat_id, "Использование: /addchat [id]")
                 
@@ -107,5 +127,25 @@ async def telegram_webhook(secret: str, request: Request):
             all_chats = chat_service.get_all_chats()
             chats_str = "\n".join([f"<code>{c}</code>" for c in all_chats])
             await telegram_client.send_message(chat_id, f"📋 <b>Список чатов для рассылки:</b>\n{chats_str}")
+            
+        elif text.startswith("/report"):
+            all_chats = chat_service.get_all_chats()
+            if chat_id not in all_chats and not is_admin:
+                await telegram_client.send_message(chat_id, "❌ Этот чат не зарегистрирован в системе рассылки.")
+                return {"ok": True}
+                
+            parts = text.split(maxsplit=1)
+            from datetime import datetime
+            import pytz
+            TZ = pytz.timezone(settings.timezone)
+            target_date_str = datetime.now(TZ).strftime("%Y-%m-%d")
+            
+            if len(parts) == 2:
+                target_date_str = parts[1].strip()
+                
+            await telegram_client.send_message(chat_id, "⏳ <i>Генерирую отчет, пожалуйста подождите...</i>")
+            from app.services.report_service import generate_report
+            report_text = await generate_report(target_date_str)
+            await telegram_client.send_message(chat_id, report_text)
 
     return {"ok": True}
