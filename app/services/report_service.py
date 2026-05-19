@@ -203,15 +203,39 @@ async def generate_report(date_str: str) -> Tuple[Optional[bytes], str, str]:
             if span:
                 plan_in_dt = _parse_dt(span.get("workTimeStart"))
                 fact_in_dt = _parse_dt(span.get("inMark"))
+                
+                # Fallback to earliest raw check-in if fact_in_dt is missing but we have raw check-in marks
+                if not fact_in_dt and plan_in_dt:
+                    in_marks = [m for m in raw_marks if m.get("markType") == 0]
+                    if in_marks:
+                        fact_in_dt = _parse_dt(in_marks[0].get("markDate"))
+
                 plan_in = plan_in_dt.strftime("%H:%M") if plan_in_dt else "—"
                 fact_in = fact_in_dt.strftime("%H:%M") if fact_in_dt else "—"
-                late_in = span.get("lateIn") or 0
+                
+                if plan_in_dt and fact_in_dt:
+                    diff_mins = (fact_in_dt - plan_in_dt).total_seconds() / 60
+                    late_in = max(0, int(diff_mins))
+                else:
+                    late_in = span.get("lateIn") or 0
 
                 plan_out_dt = _parse_dt(span.get("workTimeEnd"))
                 fact_out_dt = _parse_dt(span.get("outMark"))
+                
+                # Fallback to latest raw check-out if fact_out_dt is missing but we have raw check-out marks
+                if not fact_out_dt and plan_out_dt:
+                    out_marks = [m for m in raw_marks if m.get("markType") == 1]
+                    if out_marks:
+                        fact_out_dt = _parse_dt(out_marks[-1].get("markDate"))
+
                 plan_out = plan_out_dt.strftime("%H:%M") if plan_out_dt else "—"
                 fact_out = fact_out_dt.strftime("%H:%M") if fact_out_dt else "—"
-                early_out = span.get("earlyOut") or 0
+
+                if plan_out_dt and fact_out_dt:
+                    diff_out_mins = (plan_out_dt - fact_out_dt).total_seconds() / 60
+                    early_out = max(0, int(diff_out_mins))
+                else:
+                    early_out = span.get("earlyOut") or 0
 
                 if not fact_in_dt:
                     status_text = "Отсутствует"
@@ -228,10 +252,22 @@ async def generate_report(date_str: str) -> Tuple[Optional[bytes], str, str]:
                         status_fill = fill_red
                         early_out_count += 1
                     
+                    # Highlight if the first check-in mark is suspicious
+                    in_marks = [m for m in raw_marks if m.get("markType") == 0]
+                    is_susp = in_marks and in_marks[0].get("status") == 0
+                    
                     if not status_parts:
-                        status_parts.append("Вовремя")
-                        status_fill = fill_green
+                        if is_susp:
+                            status_parts.append("Вовремя (⚠️)")
+                            status_fill = PatternFill(start_color="FFF2CC", end_color="FFF2CC", fill_type="solid") # light warning yellow
+                        else:
+                            status_parts.append("Вовремя")
+                            status_fill = fill_green
                         ontime_count += 1
+                    else:
+                        if is_susp:
+                            status_parts.append("(⚠️)")
+                        status_fill = fill_red
                     status_text = ", ".join(status_parts)
             else:
                 # No schedule

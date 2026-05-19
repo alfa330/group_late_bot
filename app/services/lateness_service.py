@@ -159,6 +159,15 @@ async def poll_workpace() -> dict:
         logger.warning("No chat IDs configured!")
         return {"ok": True, "fetched": fetched, "sent": 0}
 
+    # Group raw marks by employeeId for easy lookup
+    emp_raw_marks = {}
+    for m in marks:
+        eid = m.get("employeeId")
+        if eid:
+            if eid not in emp_raw_marks:
+                emp_raw_marks[eid] = []
+            emp_raw_marks[eid].append(m)
+
     events_to_send = []
 
     for rec in records:
@@ -174,6 +183,19 @@ async def poll_workpace() -> dict:
         plan_dt = _parse_dt(work_time_start_str)
         if not plan_dt:
             continue
+
+        # Fallback to raw check-in marks if in_mark_str is missing in timetablespan
+        if not in_mark_str:
+            raw_ins = [m for m in emp_raw_marks.get(emp_id, []) if m.get("markType") == 0]
+            if raw_ins:
+                raw_ins.sort(key=lambda x: x.get("markDate", ""))
+                in_mark_str = raw_ins[0].get("markDate")
+                
+                # Recalculate late_in minutes
+                fact_in_dt = _parse_dt(in_mark_str)
+                if fact_in_dt:
+                    diff_mins = (fact_in_dt - plan_dt).total_seconds() / 60
+                    late_in = max(0, int(diff_mins))
 
         # Logic: missing or late
         if not in_mark_str:
@@ -198,8 +220,21 @@ async def poll_workpace() -> dict:
             out_mark_str = rec.get("outMark")
             plan_end_dt = _parse_dt(rec.get("workTimeEnd"))
             
+            # Fallback to raw check-out marks if out_mark_str is missing in timetablespan
+            early_out = rec.get("earlyOut") or 0
+            if in_mark_str and plan_end_dt and not out_mark_str:
+                raw_outs = [m for m in emp_raw_marks.get(emp_id, []) if m.get("markType") == 1]
+                if raw_outs:
+                    raw_outs.sort(key=lambda x: x.get("markDate", ""))
+                    out_mark_str = raw_outs[-1].get("markDate")
+                    
+                    # Recalculate early_out minutes
+                    fact_out_dt = _parse_dt(out_mark_str)
+                    if fact_out_dt:
+                        diff_out_mins = (plan_end_dt - fact_out_dt).total_seconds() / 60
+                        early_out = max(0, int(diff_out_mins))
+            
             if out_mark_str:
-                early_out = rec.get("earlyOut") or 0
                 if early_out >= threshold:
                     early_key = _make_event_key(emp_id, date_str, "early_out")
                     if early_key not in sent_events_cache:
