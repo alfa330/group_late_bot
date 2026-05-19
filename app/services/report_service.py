@@ -148,7 +148,8 @@ async def generate_report(date_str: str) -> Tuple[Optional[bytes], str, str]:
     headers = [
         "Отдел", "ФИО сотрудника", "График", "Все отметки за день",
         "Время прихода (план)", "Время прихода (факт)", "Опоздание (мин)",
-        "Время ухода (план)", "Время ухода (факт)", "Ранний уход (мин)", "Статус"
+        "Время ухода (план)", "Время ухода (факт)", "Ранний уход (мин)",
+        "Отработано (факт)", "Отклонение (HH:MM)", "Статус"
     ]
     ws.append(headers)
     ws.row_dimensions[3].height = 25
@@ -199,6 +200,9 @@ async def generate_report(date_str: str) -> Tuple[Optional[bytes], str, str]:
             early_out = 0
             status_text = "Вне графика"
             status_fill = fill_yellow
+            
+            fact_in_dt = None
+            fact_out_dt = None
 
             if span:
                 plan_in_dt = _parse_dt(span.get("workTimeStart"))
@@ -272,6 +276,16 @@ async def generate_report(date_str: str) -> Tuple[Optional[bytes], str, str]:
             else:
                 # No schedule
                 if raw_marks:
+                    in_marks = [m for m in raw_marks if m.get("markType") == 0]
+                    if in_marks:
+                        fact_in_dt = _parse_dt(in_marks[0].get("markDate"))
+                        fact_in = fact_in_dt.strftime("%H:%M") if fact_in_dt else "—"
+
+                    out_marks = [m for m in raw_marks if m.get("markType") == 1]
+                    if out_marks:
+                        fact_out_dt = _parse_dt(out_marks[-1].get("markDate"))
+                        fact_out = fact_out_dt.strftime("%H:%M") if fact_out_dt else "—"
+
                     status_text = "Вне графика"
                     status_fill = fill_yellow
                 else:
@@ -279,16 +293,42 @@ async def generate_report(date_str: str) -> Tuple[Optional[bytes], str, str]:
                     status_fill = fill_red
                     absent_count += 1
 
+            # Calculate worked hours (HH:MM) from earliest in and latest out
+            work_time_str = "—"
+            if fact_in_dt and fact_out_dt:
+                diff_sec = (fact_out_dt - fact_in_dt).total_seconds()
+                if diff_sec > 0:
+                    h = int(diff_sec // 3600)
+                    m = int((diff_sec % 3600) // 60)
+                    work_time_str = f"{h:02d}:{m:02d}"
+
+            # Calculate work deviation (HH:MM) from planned norm
+            deviation_str = "—"
+            if span and fact_in_dt and fact_out_dt:
+                plan_in_dt = _parse_dt(span.get("workTimeStart"))
+                plan_out_dt = _parse_dt(span.get("workTimeEnd"))
+                if plan_in_dt and plan_out_dt:
+                    norm_sec = (plan_out_dt - plan_in_dt).total_seconds()
+                    fact_sec = (fact_out_dt - fact_in_dt).total_seconds()
+                    if norm_sec > 0:
+                        diff_sec = fact_sec - norm_sec
+                        sign = "+" if diff_sec >= 0 else "-"
+                        abs_diff = abs(diff_sec)
+                        h = int(abs_diff // 3600)
+                        m = int((abs_diff % 3600) // 60)
+                        deviation_str = f"{sign}{h:02d}:{m:02d}"
+
             row_data = [
                 dept_name, name, info.get("span", {}).get("scheduleName", "—") if info.get("span") else "—",
                 marks_str, plan_in, fact_in, late_in if late_in > 0 else "—",
-                plan_out, fact_out, early_out if early_out > 0 else "—", status_text
+                plan_out, fact_out, early_out if early_out > 0 else "—",
+                work_time_str, deviation_str, status_text
             ]
             ws.append(row_data)
             ws.row_dimensions[current_row].height = 20
 
             # Stylize the row cells
-            for col_idx in range(1, 12):
+            for col_idx in range(1, 14):
                 cell = ws.cell(row=current_row, column=col_idx)
                 cell.font = font_regular
                 cell.border = thin_border
@@ -300,7 +340,7 @@ async def generate_report(date_str: str) -> Tuple[Optional[bytes], str, str]:
                     cell.alignment = align_center
                 
                 # Apply special fill to status column
-                if col_idx == 11:
+                if col_idx == 13:
                     cell.fill = status_fill
                     cell.font = font_bold
                 else:
