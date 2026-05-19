@@ -33,9 +33,13 @@ def _parse_dt(dt_str: Optional[str]) -> Optional[datetime]:
     ):
         try:
             dt = datetime.strptime(dt_str, fmt)
-            if dt.tzinfo is None:
+            if dt.tzinfo is not None:
+                return dt.astimezone(TZ)
+            elif fmt.endswith("Z"):
                 dt = pytz.utc.localize(dt)
-            return dt.astimezone(TZ)
+                return dt.astimezone(TZ)
+            else:
+                return TZ.localize(dt)
         except ValueError:
             continue
     return None
@@ -82,13 +86,11 @@ def build_late_message(rec: dict, plan_dt: datetime, fact_dt: datetime, late_min
 async def poll_workpace() -> dict:
     threshold = settings.late_threshold_minutes
     now_local = datetime.now(TZ)
-    start_local = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
-    end_local = now_local.replace(hour=23, minute=59, second=59, microsecond=999999)
-    start_utc = start_local.astimezone(pytz.utc).replace(tzinfo=None)
-    end_utc = end_local.astimezone(pytz.utc).replace(tzinfo=None)
+    start_local = now_local.replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=None)
+    end_local = now_local.replace(hour=23, minute=59, second=59, microsecond=999999, tzinfo=None)
 
     try:
-        records = await workpace_client.get_all_timetable_spans(start_utc, end_utc)
+        records = await workpace_client.get_all_timetable_spans(start_local, end_local)
     except Exception as exc:
         logger.error("Workpace API error: %s", exc)
         return {"ok": False, "error": str(exc)}
