@@ -211,7 +211,7 @@ async def poll_workpace() -> dict:
                 event_key = _make_event_key(emp_id, date_str, "missing")
                 if event_key not in sent_events_cache:
                     text = build_missing_message(rec, plan_dt, now_local)
-                    events_to_send.append((event_key, text))
+                    events_to_send.append((event_key, text, emp_name, dept_name))
         else:
             # Arrived
             if late_in >= threshold:
@@ -220,7 +220,7 @@ async def poll_workpace() -> dict:
                     fact_dt = _parse_dt(in_mark_str)
                     if fact_dt:
                         text = build_late_message(rec, plan_dt, fact_dt, late_in)
-                        events_to_send.append((event_key, text))
+                        events_to_send.append((event_key, text, emp_name, dept_name))
 
             # Early departure / Missing out mark
             out_mark_str = rec.get("outMark")
@@ -247,14 +247,14 @@ async def poll_workpace() -> dict:
                         fact_out_dt = _parse_dt(out_mark_str)
                         if plan_end_dt and fact_out_dt:
                             early_text = build_early_out_message(rec, plan_end_dt, fact_out_dt, early_out)
-                            events_to_send.append((early_key, early_text))
+                            events_to_send.append((early_key, early_text, emp_name, dept_name))
             elif in_mark_str and plan_end_dt:
                 passed_end_mins = (now_local - plan_end_dt).total_seconds() / 60
                 if passed_end_mins >= 10:
                     missing_out_key = _make_event_key(emp_id, date_str, "missing_out")
                     if missing_out_key not in sent_events_cache:
                         missing_out_text = build_missing_out_message(rec, plan_end_dt, now_local)
-                        events_to_send.append((missing_out_key, missing_out_text))
+                        events_to_send.append((missing_out_key, missing_out_text, emp_name, dept_name))
 
     for mark in marks:
         if mark.get("status") == 0:
@@ -271,9 +271,9 @@ async def poll_workpace() -> dict:
             event_key = _make_event_key(emp_id, mark_date_str, f"suspicious_{mark_id}")
             if event_key not in sent_events_cache:
                 text = build_suspicious_mark_message(mark)
-                events_to_send.append((event_key, text))
+                events_to_send.append((event_key, text, emp_name, dept_name))
 
-    for event_key, text in events_to_send:
+    for event_key, text, emp_name, dept_name in events_to_send:
         events_found += 1
         keyboard = {
             "inline_keyboard": [
@@ -283,10 +283,12 @@ async def poll_workpace() -> dict:
         
         sent_to_any = False
         for chat_id in chats:
+            if mute_service.is_event_muted_for_chat(chat_id, emp_name, dept_name):
+                continue
             msg_id = await telegram_client.send_message(chat_id, text, keyboard)
             if msg_id:
                 sent_to_any = True
-                
+
         if sent_to_any:
             sent_events_cache.add(event_key)
             sent += 1

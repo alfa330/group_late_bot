@@ -1,5 +1,6 @@
 import logging
 import time
+from typing import Optional
 
 from fastapi import APIRouter, Request
 
@@ -22,6 +23,18 @@ def _deduplicate_update(update_id: int) -> bool:
         PROCESSED_UPDATES.clear()
     PROCESSED_UPDATES.add(update_id)
     return False
+
+
+def _can_manage_mutes(is_admin: bool, chat_type: str) -> bool:
+    return is_admin or chat_type == "private"
+
+
+def _mute_scope_chat_id(chat_id: str, is_admin: bool) -> Optional[str]:
+    return None if is_admin else chat_id
+
+
+def _mute_scope_label(is_admin: bool) -> str:
+    return "глобально" if is_admin else "для вашего чата"
 
 
 @router.post("/telegram/webhook/{secret}")
@@ -80,6 +93,7 @@ async def telegram_webhook(secret: str, request: Request):
 
         chat = msg.get("chat", {})
         chat_id = str(chat.get("id", ""))
+        chat_type = chat.get("type", "")
         text = msg.get("text", "").strip()
         from_user = msg.get("from", {})
         user_id = str(from_user.get("id", ""))
@@ -94,16 +108,17 @@ async def telegram_webhook(secret: str, request: Request):
                 "<b>Доступные команды:</b>\n"
                 "• <code>/help</code> — подробная инструкция по использованию системы\n"
                 "• <code>/report</code> — получить отчет за сегодня\n"
-                "• <code>/report ГГГГ-ММ-ДД</code> — получить отчет за указанную дату (например: <code>/report 2026-05-18</code>)\n\n"
+                "• <code>/report ГГГГ-ММ-ДД</code> — получить отчет за указанную дату (например: <code>/report 2026-05-18</code>)\n"
+                "• <code>/mute_user [ФИО]</code> — не получать отбивки по сотруднику\n"
+                "• <code>/unmute_user [ФИО]</code> — снова получать отбивки по сотруднику\n"
+                "• <code>/mute_dept [Отдел]</code> — не получать отбивки по отделу\n"
+                "• <code>/unmute_dept [Отдел]</code> — снова получать отбивки по отделу\n"
+                "• <code>/muted</code> — ваши отключенные отбивки\n\n"
                 "<b>Администратор может использовать команды:</b>\n"
                 "• <code>/addchat [id]</code> — добавить чат в список рассылки\n"
                 "• <code>/delchat [id]</code> — удалить чат из списка рассылки\n"
                 "• <code>/chats</code> — список разрешенных чатов\n"
-                "• <code>/mute_user [ФИО]</code> — отключить отбивки по сотруднику\n"
-                "• <code>/unmute_user [ФИО]</code> — включить отбивки по сотруднику\n"
-                "• <code>/mute_dept [Отдел]</code> — отключить отбивки по отделу\n"
-                "• <code>/unmute_dept [Отдел]</code> — включить отбивки по отделу\n"
-                "• <code>/muted</code> — список отключенных отбивок"
+                "• те же mute-команды — глобально управлять отбивками для всех чатов"
             )
         elif text.startswith("/help"):
             help_text = (
@@ -121,12 +136,13 @@ async def telegram_webhook(secret: str, request: Request):
                 "• <code>/report YYYY-MM-DD [Отдел]</code> — за дату по отделу\n"
                 "• <code>/report YYYY-MM-DD YYYY-MM-DD</code> — за период по всем отделам\n"
                 "• <code>/report YYYY-MM-DD YYYY-MM-DD [Отдел]</code> — за период по отделу\n\n"
-                "⚙️ <b>Управление отбивками (только для администратора):</b>\n"
-                "• <code>/mute_user [ФИО]</code> — временно отключить отбивки для сотрудника\n"
-                "• <code>/unmute_user [ФИО]</code> — включить обратно отбивки для сотрудника\n"
-                "• <code>/mute_dept [Отдел]</code> — временно отключить отбивки для всего отдела\n"
-                "• <code>/unmute_dept [Отдел]</code> — включить обратно отбивки для отдела\n"
-                "• <code>/muted</code> — посмотреть список отключенных сотрудников и отделов\n\n"
+                "⚙️ <b>Персональные настройки отбивок:</b>\n"
+                "• <code>/mute_user [ФИО]</code> — не получать отбивки по сотруднику\n"
+                "• <code>/unmute_user [ФИО]</code> — снова получать отбивки по сотруднику\n"
+                "• <code>/mute_dept [Отдел]</code> — не получать отбивки по отделу\n"
+                "• <code>/unmute_dept [Отдел]</code> — снова получать отбивки по отделу\n"
+                "• <code>/muted</code> — посмотреть свои отключенные отбивки\n"
+                "<i>Обычные пользователи настраивают только личный чат с ботом. Администратор применяет эти команды глобально.</i>\n\n"
                 "<i>*Пример: <code>/report 2026-05-18 2026-05-20 Контакт-центр</code></i>"
             )
             await telegram_client.send_message(chat_id, help_text)
@@ -187,74 +203,104 @@ async def telegram_webhook(secret: str, request: Request):
             await telegram_client.send_message(chat_id, f"📋 <b>Список чатов для рассылки:</b>\n{chats_str}")
             
         elif text.startswith("/mute_user"):
-            if not is_admin:
-                await telegram_client.send_message(chat_id, "❌ Нет прав.")
+            if not _can_manage_mutes(is_admin, chat_type):
+                await telegram_client.send_message(
+                    chat_id,
+                    "❌ Персональные настройки уведомлений доступны только в личном чате с ботом. "
+                    "Напишите боту /start и используйте команду там."
+                )
                 return {"ok": True}
 
             parts = text.split(maxsplit=1)
             if len(parts) == 2:
                 target_user = parts[1].strip()
-                if mute_service.mute_user(target_user):
-                    await telegram_client.send_message(chat_id, f"🔇 Уведомления для пользователя <b>{target_user}</b> успешно отключены.")
+                scope_chat_id = _mute_scope_chat_id(chat_id, is_admin)
+                scope_label = _mute_scope_label(is_admin)
+                if mute_service.mute_user(target_user, scope_chat_id):
+                    await telegram_client.send_message(chat_id, f"🔇 Отбивки по сотруднику <b>{target_user}</b> отключены {scope_label}.")
                 else:
-                    await telegram_client.send_message(chat_id, f"ℹ️ Пользователь <b>{target_user}</b> уже находится в списке отключенных.")
+                    await telegram_client.send_message(chat_id, f"ℹ️ Сотрудник <b>{target_user}</b> уже находится в списке отключенных {scope_label}.")
             else:
                 await telegram_client.send_message(chat_id, "Использование: /mute_user [ФИО сотрудника]")
 
         elif text.startswith("/unmute_user"):
-            if not is_admin:
-                await telegram_client.send_message(chat_id, "❌ Нет прав.")
+            if not _can_manage_mutes(is_admin, chat_type):
+                await telegram_client.send_message(
+                    chat_id,
+                    "❌ Персональные настройки уведомлений доступны только в личном чате с ботом. "
+                    "Напишите боту /start и используйте команду там."
+                )
                 return {"ok": True}
 
             parts = text.split(maxsplit=1)
             if len(parts) == 2:
                 target_user = parts[1].strip()
-                if mute_service.unmute_user(target_user):
-                    await telegram_client.send_message(chat_id, f"🔊 Уведомления для пользователя <b>{target_user}</b> снова включены.")
+                scope_chat_id = _mute_scope_chat_id(chat_id, is_admin)
+                scope_label = _mute_scope_label(is_admin)
+                if mute_service.unmute_user(target_user, scope_chat_id):
+                    await telegram_client.send_message(chat_id, f"🔊 Отбивки по сотруднику <b>{target_user}</b> снова включены {scope_label}.")
                 else:
-                    await telegram_client.send_message(chat_id, f"❌ Пользователь <b>{target_user}</b> не найден в списке отключенных.")
+                    await telegram_client.send_message(chat_id, f"❌ Сотрудник <b>{target_user}</b> не найден в списке отключенных {scope_label}.")
             else:
                 await telegram_client.send_message(chat_id, "Использование: /unmute_user [ФИО сотрудника]")
 
         elif text.startswith("/mute_dept"):
-            if not is_admin:
-                await telegram_client.send_message(chat_id, "❌ Нет прав.")
+            if not _can_manage_mutes(is_admin, chat_type):
+                await telegram_client.send_message(
+                    chat_id,
+                    "❌ Персональные настройки уведомлений доступны только в личном чате с ботом. "
+                    "Напишите боту /start и используйте команду там."
+                )
                 return {"ok": True}
 
             parts = text.split(maxsplit=1)
             if len(parts) == 2:
                 target_dept = parts[1].strip()
-                if mute_service.mute_dept(target_dept):
-                    await telegram_client.send_message(chat_id, f"🔇 Уведомления для отдела <b>{target_dept}</b> успешно отключены.")
+                scope_chat_id = _mute_scope_chat_id(chat_id, is_admin)
+                scope_label = _mute_scope_label(is_admin)
+                if mute_service.mute_dept(target_dept, scope_chat_id):
+                    await telegram_client.send_message(chat_id, f"🔇 Отбивки по отделу <b>{target_dept}</b> отключены {scope_label}.")
                 else:
-                    await telegram_client.send_message(chat_id, f"ℹ️ Отдел <b>{target_dept}</b> уже находится в списке отключенных.")
+                    await telegram_client.send_message(chat_id, f"ℹ️ Отдел <b>{target_dept}</b> уже находится в списке отключенных {scope_label}.")
             else:
                 await telegram_client.send_message(chat_id, "Использование: /mute_dept [Название отдела]")
 
         elif text.startswith("/unmute_dept"):
-            if not is_admin:
-                await telegram_client.send_message(chat_id, "❌ Нет прав.")
+            if not _can_manage_mutes(is_admin, chat_type):
+                await telegram_client.send_message(
+                    chat_id,
+                    "❌ Персональные настройки уведомлений доступны только в личном чате с ботом. "
+                    "Напишите боту /start и используйте команду там."
+                )
                 return {"ok": True}
 
             parts = text.split(maxsplit=1)
             if len(parts) == 2:
                 target_dept = parts[1].strip()
-                if mute_service.unmute_dept(target_dept):
-                    await telegram_client.send_message(chat_id, f"🔊 Уведомления для отдела <b>{target_dept}</b> снова включены.")
+                scope_chat_id = _mute_scope_chat_id(chat_id, is_admin)
+                scope_label = _mute_scope_label(is_admin)
+                if mute_service.unmute_dept(target_dept, scope_chat_id):
+                    await telegram_client.send_message(chat_id, f"🔊 Отбивки по отделу <b>{target_dept}</b> снова включены {scope_label}.")
                 else:
-                    await telegram_client.send_message(chat_id, f"❌ Отдел <b>{target_dept}</b> не найден в списке отключенных.")
+                    await telegram_client.send_message(chat_id, f"❌ Отдел <b>{target_dept}</b> не найден в списке отключенных {scope_label}.")
             else:
                 await telegram_client.send_message(chat_id, "Использование: /unmute_dept [Название отдела]")
 
         elif text.startswith("/muted") or text.startswith("/mutes"):
-            if not is_admin:
-                await telegram_client.send_message(chat_id, "❌ Нет прав.")
+            if not _can_manage_mutes(is_admin, chat_type):
+                await telegram_client.send_message(
+                    chat_id,
+                    "❌ Персональные настройки уведомлений доступны только в личном чате с ботом. "
+                    "Напишите боту /start и используйте команду там."
+                )
                 return {"ok": True}
 
-            muted_users = mute_service.get_muted_users()
-            muted_depts = mute_service.get_muted_depts()
+            scope_chat_id = _mute_scope_chat_id(chat_id, is_admin)
+            muted_users = mute_service.get_muted_users(scope_chat_id)
+            muted_depts = mute_service.get_muted_depts(scope_chat_id)
 
-            response_parts = ["📋 <b>Список отключенных уведомлений:</b>\n"]
+            title = "📋 <b>Глобально отключенные отбивки:</b>\n" if is_admin else "📋 <b>Ваши отключенные отбивки:</b>\n"
+            response_parts = [title]
 
             response_parts.append("👤 <b>Сотрудники:</b>")
             if muted_users:
