@@ -83,6 +83,40 @@ def build_late_message(rec: dict, plan_dt: datetime, fact_dt: datetime, late_min
         "📋 Статус: ожидает отбивки"
     )
 
+def build_early_out_message(rec: dict, plan_end_dt: datetime, fact_out_dt: datetime, early_mins: int) -> str:
+    emp_name = rec.get("employeeName") or "—"
+    schedule = rec.get("scheduleName") or "—"
+    plan = _format_dt(plan_end_dt)
+    fact = _format_dt(fact_out_dt)
+    location = rec.get("outLocationName") or rec.get("locationName") or "—"
+
+    return (
+        "🏃 <b>Ранний уход</b>\n\n"
+        f"👤 Сотрудник: {emp_name}\n"
+        f"📅 График: {schedule}\n"
+        f"🕐 Конец смены: {plan}\n"
+        f"🕑 Ушел: {fact}\n"
+        f"⏱ Ушел раньше на: <b>{early_mins} мин.</b>\n"
+        f"📍 Локация: {location}\n\n"
+        "📋 Статус: ожидает отбивки"
+    )
+
+def build_missing_out_message(rec: dict, plan_end_dt: datetime, now_dt: datetime) -> str:
+    emp_name = rec.get("employeeName") or "—"
+    schedule = rec.get("scheduleName") or "—"
+    plan = _format_dt(plan_end_dt)
+    passed_mins = int((now_dt - plan_end_dt).total_seconds() / 60)
+
+    return (
+        "🚨 <b>Нет отметки об уходе</b>\n\n"
+        f"👤 Сотрудник: {emp_name}\n"
+        f"📅 График: {schedule}\n"
+        f"🕐 Конец смены: {plan}\n"
+        f"🕑 Факт: Нет отметки\n"
+        f"⏱ Прошло с конца смены: <b>{passed_mins} мин.</b>\n\n"
+        "📋 Статус: ожидает отбивки"
+    )
+
 async def poll_workpace() -> dict:
     threshold = settings.late_threshold_minutes
     now_local = datetime.now(TZ)
@@ -118,8 +152,7 @@ async def poll_workpace() -> dict:
         if not plan_dt:
             continue
 
-        event_key = None
-        text = None
+        events_to_send = []
 
         # Logic: missing or late
         if not in_mark_str:
@@ -129,6 +162,7 @@ async def poll_workpace() -> dict:
                 event_key = _make_event_key(emp_id, date_str, "missing")
                 if event_key not in sent_events_cache:
                     text = build_missing_message(rec, plan_dt, now_local)
+                    events_to_send.append((event_key, text))
         else:
             # Arrived
             if late_in >= threshold:
@@ -137,8 +171,30 @@ async def poll_workpace() -> dict:
                     fact_dt = _parse_dt(in_mark_str)
                     if fact_dt:
                         text = build_late_message(rec, plan_dt, fact_dt, late_in)
+                        events_to_send.append((event_key, text))
 
-        if text and event_key:
+            # Early departure / Missing out mark
+            out_mark_str = rec.get("outMark")
+            plan_end_dt = _parse_dt(rec.get("workTimeEnd"))
+            
+            if out_mark_str:
+                early_out = rec.get("earlyOut") or 0
+                if early_out >= threshold:
+                    early_key = _make_event_key(emp_id, date_str, "early_out")
+                    if early_key not in sent_events_cache:
+                        fact_out_dt = _parse_dt(out_mark_str)
+                        if plan_end_dt and fact_out_dt:
+                            early_text = build_early_out_message(rec, plan_end_dt, fact_out_dt, early_out)
+                            events_to_send.append((early_key, early_text))
+            elif in_mark_str and plan_end_dt:
+                passed_end_mins = (now_local - plan_end_dt).total_seconds() / 60
+                if passed_end_mins >= 10:
+                    missing_out_key = _make_event_key(emp_id, date_str, "missing_out")
+                    if missing_out_key not in sent_events_cache:
+                        missing_out_text = build_missing_out_message(rec, plan_end_dt, now_local)
+                        events_to_send.append((missing_out_key, missing_out_text))
+
+        for event_key, text in events_to_send:
             events_found += 1
             keyboard = {
                 "inline_keyboard": [
