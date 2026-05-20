@@ -9,6 +9,7 @@ from app.config import settings
 from app.telegram_client import telegram_client
 from app.workpace_client import workpace_client
 from app.services.chat_service import chat_service
+from app.services.department_service import get_employee_department_lookup, resolve_department_name
 from app.services.mute_service import mute_service
 
 logger = logging.getLogger(__name__)
@@ -31,7 +32,7 @@ def _to_int(value) -> int:
 
 def _employee_keys(item: dict) -> set[str]:
     keys = set()
-    for field in ("employeeId", "employeeExternalId"):
+    for field in ("employeeId", "employeeExternalId", "id", "externalId"):
         value = item.get(field)
         if value:
             keys.add(str(value))
@@ -84,8 +85,18 @@ def _format_dt(dt: Optional[datetime]) -> str:
         return "—"
     return dt.strftime("%H:%M")
 
+def _mark_date(mark: dict) -> Optional[str]:
+    return mark.get("markDate") or mark.get("date")
+
+def _mark_type(mark: dict):
+    return mark.get("markType") if mark.get("markType") is not None else mark.get("type")
+
+def _employee_name(item: dict) -> str:
+    return item.get("employeeName") or item.get("name") or item.get("fullName") or "—"
+
 def build_missing_message(rec: dict, plan_dt: datetime, now_dt: datetime) -> str:
     emp_name = rec.get("employeeName") or "—"
+    dept = rec.get("departmentName") or "—"
     schedule = rec.get("scheduleName") or "—"
     plan = _format_dt(plan_dt)
     passed_mins = int((now_dt - plan_dt).total_seconds() / 60)
@@ -93,6 +104,7 @@ def build_missing_message(rec: dict, plan_dt: datetime, now_dt: datetime) -> str
     return (
         "🚨 <b>Отсутствует на месте</b>\n\n"
         f"👤 Сотрудник: {emp_name}\n"
+        f"🏢 Отдел: {dept}\n"
         f"📅 График: {schedule}\n"
         f"🕐 План: {plan}\n"
         f"🕑 Факт: Нет отметки\n"
@@ -102,6 +114,7 @@ def build_missing_message(rec: dict, plan_dt: datetime, now_dt: datetime) -> str
 
 def build_late_message(rec: dict, plan_dt: datetime, fact_dt: datetime, late_mins: int) -> str:
     emp_name = rec.get("employeeName") or "—"
+    dept = rec.get("departmentName") or "—"
     schedule = rec.get("scheduleName") or "—"
     plan = _format_dt(plan_dt)
     fact = _format_dt(fact_dt)
@@ -110,6 +123,7 @@ def build_late_message(rec: dict, plan_dt: datetime, fact_dt: datetime, late_min
     return (
         "⏰ <b>Фактическое опоздание</b>\n\n"
         f"👤 Сотрудник: {emp_name}\n"
+        f"🏢 Отдел: {dept}\n"
         f"📅 График: {schedule}\n"
         f"🕐 План: {plan}\n"
         f"🕑 Факт: {fact}\n"
@@ -120,6 +134,7 @@ def build_late_message(rec: dict, plan_dt: datetime, fact_dt: datetime, late_min
 
 def build_early_out_message(rec: dict, plan_end_dt: datetime, fact_out_dt: datetime, early_mins: int) -> str:
     emp_name = rec.get("employeeName") or "—"
+    dept = rec.get("departmentName") or "—"
     schedule = rec.get("scheduleName") or "—"
     plan = _format_dt(plan_end_dt)
     fact = _format_dt(fact_out_dt)
@@ -128,6 +143,7 @@ def build_early_out_message(rec: dict, plan_end_dt: datetime, fact_out_dt: datet
     return (
         "🏃 <b>Ранний уход</b>\n\n"
         f"👤 Сотрудник: {emp_name}\n"
+        f"🏢 Отдел: {dept}\n"
         f"📅 График: {schedule}\n"
         f"🕐 Конец смены: {plan}\n"
         f"🕑 Ушел: {fact}\n"
@@ -138,6 +154,7 @@ def build_early_out_message(rec: dict, plan_end_dt: datetime, fact_out_dt: datet
 
 def build_missing_out_message(rec: dict, plan_end_dt: datetime, now_dt: datetime) -> str:
     emp_name = rec.get("employeeName") or "—"
+    dept = rec.get("departmentName") or "—"
     schedule = rec.get("scheduleName") or "—"
     plan = _format_dt(plan_end_dt)
     passed_mins = int((now_dt - plan_end_dt).total_seconds() / 60)
@@ -145,6 +162,7 @@ def build_missing_out_message(rec: dict, plan_end_dt: datetime, now_dt: datetime
     return (
         "🚨 <b>Нет отметки об уходе</b>\n\n"
         f"👤 Сотрудник: {emp_name}\n"
+        f"🏢 Отдел: {dept}\n"
         f"📅 График: {schedule}\n"
         f"🕐 Конец смены: {plan}\n"
         f"🕑 Факт: Нет отметки\n"
@@ -153,14 +171,14 @@ def build_missing_out_message(rec: dict, plan_end_dt: datetime, now_dt: datetime
     )
 
 def build_suspicious_mark_message(mark: dict) -> str:
-    emp_name = mark.get("employeeName") or "—"
-    dept = mark.get("departmentName") or "—"
-    mark_dt = _parse_dt(mark.get("markDate"))
+    emp_name = _employee_name(mark)
+    dept = mark.get("departmentName") or mark.get("department") or "—"
+    mark_dt = _parse_dt(_mark_date(mark))
     fact = _format_dt(mark_dt)
     
-    mtype_val = mark.get("markType")
+    mtype_val = _mark_type(mark)
     mtype = "Вход" if mtype_val == 0 else "Выход" if mtype_val == 1 else "—"
-    device = mark.get("deviceName") or "—"
+    device = mark.get("deviceName") or mark.get("location") or "—"
 
     return (
         "⚠️ <b>Подозрительная отметка</b>\n\n"
@@ -181,6 +199,7 @@ async def poll_workpace() -> dict:
     try:
         records = await workpace_client.get_all_timetable_spans(start_local, end_local)
         marks = await workpace_client.get_all_domain_marks(start_local, end_local)
+        employee_lookup = await get_employee_department_lookup()
     except Exception as exc:
         logger.error("Workpace API error: %s", exc)
         return {"ok": False, "error": str(exc)}
@@ -209,8 +228,9 @@ async def poll_workpace() -> dict:
         if not emp_id:
             continue
 
-        emp_name = rec.get("employeeName") or "—"
-        dept_name = rec.get("departmentName") or rec.get("scheduleName") or "Без отдела"
+        emp_name = _employee_name(rec)
+        dept_name = resolve_department_name(rec, employee_lookup)
+        rec = {**rec, "departmentName": dept_name}
         if mute_service.is_user_muted(emp_name) or mute_service.is_dept_muted(dept_name):
             continue
 
@@ -228,10 +248,10 @@ async def poll_workpace() -> dict:
         fact_in_dt = _parse_dt(in_mark_str)
         # Fallback to raw check-in marks if timetablespan has no usable inMark yet.
         if not fact_in_dt:
-            raw_ins = [m for m in _get_raw_marks_for_employee(emp_raw_marks, rec) if m.get("markType") == 0]
+            raw_ins = [m for m in _get_raw_marks_for_employee(emp_raw_marks, rec) if _mark_type(m) == 0]
             if raw_ins:
-                raw_ins.sort(key=lambda x: x.get("markDate", ""))
-                in_mark_str = raw_ins[0].get("markDate")
+                raw_ins.sort(key=lambda x: _mark_date(x) or "")
+                in_mark_str = _mark_date(raw_ins[0])
                 fact_in_dt = _parse_dt(in_mark_str)
 
         if fact_in_dt:
@@ -262,10 +282,10 @@ async def poll_workpace() -> dict:
             # Fallback to raw check-out marks if out_mark_str is missing in timetablespan
             early_out = _to_int(rec.get("earlyOut"))
             if in_mark_str and plan_end_dt and not out_mark_str:
-                raw_outs = [m for m in _get_raw_marks_for_employee(emp_raw_marks, rec) if m.get("markType") == 1]
+                raw_outs = [m for m in _get_raw_marks_for_employee(emp_raw_marks, rec) if _mark_type(m) == 1]
                 if raw_outs:
-                    raw_outs.sort(key=lambda x: x.get("markDate", ""))
-                    out_mark_str = raw_outs[-1].get("markDate")
+                    raw_outs.sort(key=lambda x: _mark_date(x) or "")
+                    out_mark_str = _mark_date(raw_outs[-1])
                     
                     # Recalculate early_out minutes
                     fact_out_dt = _parse_dt(out_mark_str)
@@ -291,16 +311,17 @@ async def poll_workpace() -> dict:
 
     for mark in marks:
         if mark.get("status") == 0:
-            emp_id = mark.get("employeeId")
-            mark_id = mark.get("id")
+            emp_id = mark.get("employeeId") or mark.get("id") or mark.get("externalId")
+            mark_id = mark.get("markId") or mark.get("id") or f"{emp_id}:{_mark_date(mark)}:{_mark_type(mark)}"
             if not emp_id or not mark_id:
                 continue
 
-            emp_name = mark.get("employeeName") or "—"
-            dept_name = mark.get("departmentName") or "Без отдела"
+            emp_name = _employee_name(mark)
+            dept_name = resolve_department_name(mark, employee_lookup)
+            mark = {**mark, "departmentName": dept_name}
             if mute_service.is_user_muted(emp_name) or mute_service.is_dept_muted(dept_name):
                 continue
-            mark_date_str = mark.get("markDate", "")[:10]
+            mark_date_str = (_mark_date(mark) or "")[:10]
             event_key = _make_event_key(emp_id, mark_date_str, f"suspicious_{mark_id}")
             if event_key not in sent_events_cache:
                 text = build_suspicious_mark_message(mark)
@@ -316,6 +337,8 @@ async def poll_workpace() -> dict:
         
         sent_to_any = False
         for chat_id in chats:
+            if not chat_service.chat_allows_department(chat_id, dept_name):
+                continue
             if mute_service.is_event_muted_for_chat(chat_id, emp_name, dept_name):
                 continue
             msg_id = await telegram_client.send_message(chat_id, text, keyboard)

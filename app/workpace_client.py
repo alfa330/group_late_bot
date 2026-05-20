@@ -1,6 +1,6 @@
 import logging
 from datetime import datetime, timedelta
-from typing import Optional, Tuple
+from typing import Optional
 
 import httpx
 
@@ -143,6 +143,63 @@ class WorkpaceClient:
 
         logger.info(
             "Fetched %d timetablespan records (totalCount=%s)",
+            len(all_records),
+            total_count,
+        )
+        return all_records
+
+    # ---------------------------------------------------------------- employee
+
+    async def get_employee(
+        self,
+        skip: int = 0,
+        take: int = 100,
+        active_only: bool = True,
+    ) -> dict:
+        """Single page request to /public/v1/employee."""
+        import json
+
+        token = await self.get_valid_access_token()
+        url = f"{self.base_url}/public/v1/employee"
+        params = {
+            "skip": skip,
+            "take": take,
+            "requireTotalCount": "true",
+        }
+        if active_only:
+            params["filter"] = json.dumps(["isArchived", "=", False])
+
+        headers = {"Authorization": f"Bearer {token}"}
+        async with httpx.AsyncClient(timeout=60) as client:
+            resp = await client.get(url, params=params, headers=headers)
+            resp.raise_for_status()
+            return resp.json()
+
+    async def get_all_employees(
+        self, take: int = 100, active_only: bool = True
+    ) -> list[dict]:
+        """Paginate through /public/v1/employee records."""
+        all_records: list[dict] = []
+        skip = 0
+        total_count: Optional[int] = None
+
+        while True:
+            data = await self.get_employee(skip=skip, take=take, active_only=active_only)
+            records = data.get("data", [])
+            all_records.extend(records)
+
+            if total_count is None:
+                total_count = data.get("totalCount")
+
+            skip += len(records)
+
+            if not records:
+                break
+            if total_count is not None and skip >= total_count:
+                break
+
+        logger.info(
+            "Fetched %d employee records (totalCount=%s)",
             len(all_records),
             total_count,
         )

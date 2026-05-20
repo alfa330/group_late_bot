@@ -9,6 +9,7 @@ from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 
 from app.config import settings
 from app.workpace_client import workpace_client
+from app.services.department_service import get_employee_department_lookup, resolve_department_name
 
 logger = logging.getLogger(__name__)
 TZ = pytz.timezone(settings.timezone)
@@ -36,6 +37,35 @@ def _parse_dt(dt_str: Optional[str]) -> Optional[datetime]:
         except ValueError:
             continue
     return None
+
+
+def _employee_id(item: dict) -> Optional[str]:
+    for field in ("employeeId", "id", "employeeExternalId", "externalId"):
+        value = item.get(field)
+        if value:
+            return str(value)
+    return None
+
+
+def _employee_name(item: dict) -> str:
+    return item.get("employeeName") or item.get("name") or item.get("fullName") or "—"
+
+
+def _mark_date(mark: dict) -> Optional[str]:
+    return mark.get("markDate") or mark.get("date")
+
+
+def _mark_type(mark: dict):
+    return mark.get("markType") if mark.get("markType") is not None else mark.get("type")
+
+
+def _is_archived(item: dict) -> bool:
+    return (
+        item.get("employeeIsArchived") is True
+        or str(item.get("employeeIsArchived")).lower() == "true"
+        or item.get("isArchived") is True
+        or str(item.get("isArchived")).lower() == "true"
+    )
 
 
 async def generate_report(
@@ -69,6 +99,12 @@ async def generate_report(
         return None, "", "❌ Период отчета не должен превышать 31 день."
 
     threshold = settings.late_threshold_minutes
+
+    try:
+        employee_lookup = await get_employee_department_lookup()
+    except Exception as exc:
+        logger.error("Failed to fetch employees for department lookup: %s", exc)
+        return None, "", f"❌ Ошибка получения списка сотрудников Workpace для определения отделов:\n<code>{exc}</code>"
 
     # Colors and Fonts
     font_title = Font(name="Calibri", size=16, bold=True, color="1F4E78")
@@ -129,42 +165,45 @@ async def generate_report(
         emp_data = {}
 
         for rec in records:
-            if rec.get("employeeIsArchived") is True or str(rec.get("employeeIsArchived")).lower() == "true":
+            if _is_archived(rec):
                 continue
-            emp_id = rec.get("employeeExternalId") or rec.get("employeeId")
+            emp_id = _employee_id(rec)
             if not emp_id:
                 continue
-            emp_name = rec.get("employeeName") or "—"
+            emp_name = _employee_name(rec)
+            dept_name = resolve_department_name(rec, employee_lookup)
             if emp_id not in emp_data:
                 emp_data[emp_id] = {
-                    "span": rec,
+                    "span": {**rec, "departmentName": dept_name},
                     "marks": [],
                     "name": emp_name,
-                    "dept": rec.get("departmentName") or rec.get("scheduleName") or "Без отдела"
+                    "dept": dept_name,
                 }
             else:
-                emp_data[emp_id]["span"] = rec
-                if rec.get("departmentName"):
-                    emp_data[emp_id]["dept"] = rec["departmentName"]
+                emp_data[emp_id]["span"] = {**rec, "departmentName": dept_name}
+                emp_data[emp_id]["dept"] = dept_name
 
         for m in marks:
             if m.get("status") == 0:
                 total_suspicious_marks_count += 1
-            if m.get("employeeIsArchived") is True or str(m.get("employeeIsArchived")).lower() == "true":
+            if _is_archived(m):
                 continue
-            emp_id = m.get("employeeId")
+            emp_id = _employee_id(m)
             if not emp_id:
                 continue
-            emp_name = m.get("employeeName") or "—"
+            emp_name = _employee_name(m)
+            dept_name = resolve_department_name(m, employee_lookup)
+            m = {**m, "departmentName": dept_name}
             if emp_id not in emp_data:
                 emp_data[emp_id] = {
                     "span": None,
                     "marks": [m],
                     "name": emp_name,
-                    "dept": m.get("departmentName") or "Без отдела"
+                    "dept": dept_name,
                 }
             else:
                 emp_data[emp_id]["marks"].append(m)
+                emp_data[emp_id]["dept"] = dept_name
 
         # Apply department filtering if specified
         if dept_filter:
@@ -229,9 +268,9 @@ async def generate_report(
                 # Format raw marks list
                 formatted_marks = []
                 for m in raw_marks:
-                    m_dt = _parse_dt(m.get("markDate"))
+                    m_dt = _parse_dt(_mark_date(m))
                     m_time = m_dt.strftime("%H:%M") if m_dt else "??:??"
-                    mtype_val = m.get("markType")
+                    mtype_val = _mark_type(m)
                     mtype = "Вход" if mtype_val == 0 else "Выход" if mtype_val == 1 else "Отм"
                     is_suspicious = m.get("status") == 0
                     susp_prefix = "⚠️ " if is_suspicious else ""
@@ -255,9 +294,10 @@ async def generate_report(
                     fact_in_dt = _parse_dt(span.get("inMark"))
                     
                     if not fact_in_dt and plan_in_dt:
-                        in_marks = [m for m in raw_marks if m.get("markType") == 0]
+                        in_marks = [m for m in raw_marks if _mark_type(m) == 0]
                         if in_marks:
-                            fact_in_dt = _parse_dt(in_marks[0].get("markDate"))
+                            in_marks.sort(key=lambda x: _mark_date(x) or "")
+                            fact_in_dt = _parse_dt(_mark_date(in_marks[0]))
 
                     plan_in = plan_in_dt.strftime("%H:%M") if plan_in_dt else "—"
                     fact_in = fact_in_dt.strftime("%H:%M") if fact_in_dt else "—"
@@ -272,9 +312,10 @@ async def generate_report(
                     fact_out_dt = _parse_dt(span.get("outMark"))
                     
                     if not fact_out_dt and plan_out_dt:
-                        out_marks = [m for m in raw_marks if m.get("markType") == 1]
+                        out_marks = [m for m in raw_marks if _mark_type(m) == 1]
                         if out_marks:
-                            fact_out_dt = _parse_dt(out_marks[-1].get("markDate"))
+                            out_marks.sort(key=lambda x: _mark_date(x) or "")
+                            fact_out_dt = _parse_dt(_mark_date(out_marks[-1]))
 
                     plan_out = plan_out_dt.strftime("%H:%M") if plan_out_dt else "—"
                     fact_out = fact_out_dt.strftime("%H:%M") if fact_out_dt else "—"
@@ -300,7 +341,7 @@ async def generate_report(
                             status_fill = fill_red
                             total_early_out_count += 1
                         
-                        in_marks = [m for m in raw_marks if m.get("markType") == 0]
+                        in_marks = [m for m in raw_marks if _mark_type(m) == 0]
                         is_susp = in_marks and in_marks[0].get("status") == 0
                         
                         if not status_parts:
@@ -318,14 +359,16 @@ async def generate_report(
                         status_text = ", ".join(status_parts)
                 else:
                     if raw_marks:
-                        in_marks = [m for m in raw_marks if m.get("markType") == 0]
+                        in_marks = [m for m in raw_marks if _mark_type(m) == 0]
                         if in_marks:
-                            fact_in_dt = _parse_dt(in_marks[0].get("markDate"))
+                            in_marks.sort(key=lambda x: _mark_date(x) or "")
+                            fact_in_dt = _parse_dt(_mark_date(in_marks[0]))
                             fact_in = fact_in_dt.strftime("%H:%M") if fact_in_dt else "—"
 
-                        out_marks = [m for m in raw_marks if m.get("markType") == 1]
+                        out_marks = [m for m in raw_marks if _mark_type(m) == 1]
                         if out_marks:
-                            fact_out_dt = _parse_dt(out_marks[-1].get("markDate"))
+                            out_marks.sort(key=lambda x: _mark_date(x) or "")
+                            fact_out_dt = _parse_dt(_mark_date(out_marks[-1]))
                             fact_out = fact_out_dt.strftime("%H:%M") if fact_out_dt else "—"
 
                         status_text = "Вне графика"
