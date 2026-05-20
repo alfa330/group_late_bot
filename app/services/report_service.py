@@ -1,7 +1,7 @@
 import logging
 import pytz
 from datetime import datetime, timedelta
-from typing import Optional, Tuple, List
+from typing import Optional, Tuple
 from io import BytesIO
 
 from openpyxl import Workbook
@@ -68,10 +68,35 @@ def _is_archived(item: dict) -> bool:
     )
 
 
+def _normalize_department_filters(dept_filter) -> list[str]:
+    if not dept_filter:
+        return []
+    if isinstance(dept_filter, str):
+        return [dept_filter.strip()] if dept_filter.strip() else []
+    return [str(value).strip() for value in dept_filter if str(value).strip()]
+
+
+def _department_matches(department_name: str, department_filters: list[str]) -> bool:
+    if not department_filters:
+        return True
+
+    department_lower = department_name.lower()
+    return any(
+        department_filter.lower() in department_lower
+        or department_lower in department_filter.lower()
+        for department_filter in department_filters
+    )
+
+
+def _format_department_filter(dept_filter) -> str:
+    department_filters = _normalize_department_filters(dept_filter)
+    return ", ".join(department_filters) if department_filters else "Все отделы"
+
+
 async def generate_report(
     start_date_str: str,
     end_date_str: Optional[str] = None,
-    dept_filter: Optional[str] = None,
+    dept_filter=None,
 ) -> Tuple[Optional[bytes], str, str]:
     """
     Generate a detailed Excel attendance report for a single date or a period.
@@ -99,6 +124,8 @@ async def generate_report(
         return None, "", "❌ Период отчета не должен превышать 31 день."
 
     threshold = settings.late_threshold_minutes
+    department_filters = _normalize_department_filters(dept_filter)
+    department_filter_label = _format_department_filter(dept_filter)
 
     try:
         employee_lookup = await get_employee_department_lookup()
@@ -206,16 +233,15 @@ async def generate_report(
                 emp_data[emp_id]["dept"] = dept_name
 
         # Apply department filtering if specified
-        if dept_filter:
-            df_lower = dept_filter.lower().strip()
+        if department_filters:
             emp_data = {
                 k: v for k, v in emp_data.items()
-                if df_lower in v["dept"].lower()
+                if _department_matches(v["dept"], department_filters)
             }
 
         # If we have no data and it's a single day, or if it's a period we still create the sheet but with warning
         if not emp_data and not is_period:
-            return None, "", f"ℹ️ Данные по отделу <b>{dept_filter or 'Все отделы'}</b> за {date_iso} отсутствуют в Workpace."
+            return None, "", f"ℹ️ Данные по отделу <b>{department_filter_label}</b> за {date_iso} отсутствуют в Workpace."
 
         # Create or fetch sheet for this day
         if first_sheet:
@@ -575,7 +601,7 @@ async def generate_report(
     if is_period:
         summary_lines.append(f"📊 <b>Сводный отчет по посещаемости за период</b>\n")
         summary_lines.append(f"📅 Период: <b>{start_date_str}</b> по <b>{end_date_str}</b>")
-        summary_lines.append(f"🏢 Отдел: <b>{dept_filter or 'Все отделы'}</b>")
+        summary_lines.append(f"🏢 Отдел: <b>{department_filter_label}</b>")
         summary_lines.append(f"\n📈 <b>Итоги за {diff_days + 1} дн.:</b>")
         summary_lines.append(f"• Всего уникальных сотрудников: <b>{len(total_unique_employees)}</b>")
         summary_lines.append(f"• Человеко-дней вовремя: <b>{total_ontime_days}</b>")
@@ -588,7 +614,7 @@ async def generate_report(
         summary_lines.append("\n📂 <i>В прикрепленном файле: первый лист — общая сводная статистика за весь период, а последующие листы — подробные отчеты на каждый день.</i>")
     else:
         summary_lines.append(f"📊 <b>Отчет по посещаемости за {start_date_str}</b>\n")
-        summary_lines.append(f"🏢 Отдел: <b>{dept_filter or 'Все отделы'}</b>")
+        summary_lines.append(f"🏢 Отдел: <b>{department_filter_label}</b>")
         summary_lines.append(f"\n📈 <b>Итоги дня по компании:</b>")
         summary_lines.append(f"• Всего уникальных сотрудников: <b>{len(total_unique_employees)}</b>")
         summary_lines.append(f"• Пришли вовремя: <b>{total_ontime_days}</b>")

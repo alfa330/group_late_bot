@@ -38,11 +38,23 @@ def _mute_scope_label(is_admin: bool) -> str:
     return "глобально" if is_admin else "для вашего чата"
 
 
+def _message_command(text: str) -> str:
+    if not text:
+        return ""
+    return text.split(maxsplit=1)[0].split("@", 1)[0].lower()
+
+
 def _admin_chat_scope_from_args(text: str, is_admin: bool) -> tuple[Optional[str], bool]:
     parts = text.split(maxsplit=1)
     if is_admin and len(parts) == 2:
         return parts[1].strip(), True
     return None, False
+
+
+def _format_departments_for_message(departments: list[str]) -> str:
+    if not departments:
+        return "все отделы"
+    return ", ".join(f"<b>{department}</b>" for department in departments)
 
 
 async def _send_department_list(chat_id: str):
@@ -125,8 +137,9 @@ async def telegram_webhook(secret: str, request: Request):
         user_id = str(from_user.get("id", ""))
 
         is_admin = (user_id == settings.default_telegram_chat_id) or (chat_id == settings.default_telegram_chat_id)
+        command = _message_command(text)
 
-        if text.startswith("/start"):
+        if command == "/start":
             await telegram_client.send_message(
                 chat_id,
                 "👋 Привет! Я бот для отбивки опозданий.\n"
@@ -145,15 +158,19 @@ async def telegram_webhook(secret: str, request: Request):
                 "<b>Администратор может использовать команды:</b>\n"
                 "• <code>/addchat [id]</code> — добавить чат в список рассылки\n"
                 "• <code>/delchat [id]</code> — удалить чат из списка рассылки\n"
-                "• <code>/setchatdept [id] [Отдел]</code> — закрепить чат за отделом\n"
-                "• <code>/setdept [Отдел]</code> — закрепить текущий чат за отделом\n"
+                "• <code>/setchatdept [id] [Отдел1; Отдел2]</code> — закрепить чат за отделами\n"
+                "• <code>/setdept [Отдел1; Отдел2]</code> — закрепить текущий чат за отделами\n"
+                "• <code>/addchatdept [id] [Отдел]</code> — добавить отдел к чату\n"
+                "• <code>/adddept [Отдел]</code> — добавить отдел к текущему чату\n"
+                "• <code>/delchatdept [id] [Отдел]</code> — убрать отдел из чата\n"
+                "• <code>/deldept [Отдел]</code> — убрать отдел из текущего чата\n"
                 "• <code>/clearchatdept [id]</code> — убрать фильтр отдела у чата\n"
                 "• <code>/cleardept</code> — убрать фильтр отдела у текущего чата\n"
                 "• <code>/chats</code> — список разрешенных чатов\n"
                 "• <code>/departments</code> — список отделов Workpace\n"
                 "• те же mute-команды — глобально управлять отбивками для всех чатов"
             )
-        elif text.startswith("/help"):
+        elif command == "/help":
             help_text = (
                 "ℹ️ <b>Информационная система Group Late Bot</b>\n\n"
                 "Автоматизированный инструмент для мониторинга трудовой дисциплины и учета рабочего времени сотрудников (интеграция с платформой <b>Workpace</b>).\n\n"
@@ -180,14 +197,18 @@ async def telegram_webhook(secret: str, request: Request):
                 "<i>Обычные пользователи настраивают только личный чат с ботом. Администратор применяет эти команды глобально.</i>\n\n"
                 "🏢 <b>Отделы и чаты:</b>\n"
                 "• <code>/departments</code> — список отделов Workpace\n"
-                "• <code>/setchatdept [Chat ID] [Отдел]</code> — отправлять в чат только уведомления выбранного отдела\n"
-                "• <code>/setdept [Отдел]</code> — сделать текущий чат чатом выбранного отдела\n"
+                "• <code>/setchatdept [Chat ID] [Отдел1; Отдел2]</code> — отправлять в чат только уведомления выбранных отделов\n"
+                "• <code>/setdept [Отдел1; Отдел2]</code> — сделать текущий чат чатом выбранных отделов\n"
+                "• <code>/addchatdept [Chat ID] [Отдел]</code> — добавить еще один отдел к чату\n"
+                "• <code>/adddept [Отдел]</code> — добавить еще один отдел к текущему чату\n"
+                "• <code>/delchatdept [Chat ID] [Отдел]</code> — убрать отдел из чата\n"
+                "• <code>/deldept [Отдел]</code> — убрать отдел из текущего чата\n"
                 "• <code>/clearchatdept [Chat ID]</code> — снова отправлять в чат все отделы\n"
                 "• <code>/cleardept</code> — снять фильтр отдела с текущего чата\n\n"
                 "<i>*Пример: <code>/report 2026-05-18 2026-05-20 Контакт-центр</code></i>"
             )
             await telegram_client.send_message(chat_id, help_text)
-        elif text.startswith("/addchat"):
+        elif command == "/addchat":
             if not is_admin:
                 await telegram_client.send_message(chat_id, "❌ Нет прав.")
                 return {"ok": True}
@@ -203,7 +224,7 @@ async def telegram_webhook(secret: str, request: Request):
                     "<b>Доступные команды для всех участников:</b>\n"
                     "• <code>/report</code> — получить отчет за сегодня\n"
                     "• <code>/report ГГГГ-ММ-ДД</code> — получить отчет за указанную дату (например: <code>/report 2026-05-18</code>)\n\n"
-                    "<i>Администратор может закрепить чат за отделом командой /setchatdept.</i>"
+                    "<i>Администратор может закрепить чат за одним или несколькими отделами командой /setchatdept.</i>"
                 )
                 try:
                     msg_id = await telegram_client.send_message(target_id, welcome_text)
@@ -220,7 +241,7 @@ async def telegram_webhook(secret: str, request: Request):
             else:
                 await telegram_client.send_message(chat_id, "Использование: /addchat [id]")
                 
-        elif text.startswith("/delchat"):
+        elif command == "/delchat":
             if not is_admin:
                 await telegram_client.send_message(chat_id, "❌ Нет прав.")
                 return {"ok": True}
@@ -235,7 +256,7 @@ async def telegram_webhook(secret: str, request: Request):
             else:
                 await telegram_client.send_message(chat_id, "Использование: /delchat [id]")
                 
-        elif text.startswith("/chats"):
+        elif command == "/chats":
             if not is_admin:
                 await telegram_client.send_message(chat_id, "❌ Нет прав.")
                 return {"ok": True}
@@ -251,7 +272,7 @@ async def telegram_webhook(secret: str, request: Request):
             global_mute_text = "\n🔕 <b>Глобально все уведомления отключены.</b>\n" if mute_service.get_all_muted() else "\n"
             await telegram_client.send_message(chat_id, f"📋 <b>Список чатов для рассылки:</b>{global_mute_text}{chats_str}")
 
-        elif text.startswith("/setchatdept"):
+        elif command == "/setchatdept":
             if not is_admin:
                 await telegram_client.send_message(chat_id, "❌ Нет прав.")
                 return {"ok": True}
@@ -261,13 +282,14 @@ async def telegram_webhook(secret: str, request: Request):
                 target_id = parts[1].strip()
                 target_dept = parts[2].strip()
                 if chat_service.set_chat_department(target_id, target_dept):
-                    await telegram_client.send_message(chat_id, f"✅ Чат <code>{target_id}</code> закреплен за отделом <b>{target_dept}</b>. Теперь туда будут уходить только уведомления этого отдела.")
+                    departments = chat_service.get_chat_departments(target_id)
+                    await telegram_client.send_message(chat_id, f"✅ Чат <code>{target_id}</code> закреплен за отделами: {_format_departments_for_message(departments)}. Теперь туда будут уходить только уведомления этих отделов.")
                 else:
-                    await telegram_client.send_message(chat_id, f"❌ Не удалось настроить чат <code>{target_id}</code>. Проверьте, что он добавлен через /addchat и отдел указан полностью.")
+                    await telegram_client.send_message(chat_id, f"❌ Не удалось настроить чат <code>{target_id}</code>. Проверьте, что он добавлен через /addchat и отделы указаны полностью.")
             else:
-                await telegram_client.send_message(chat_id, "Использование: /setchatdept [Chat ID] [Название отдела]")
+                await telegram_client.send_message(chat_id, "Использование: /setchatdept [Chat ID] [Отдел1; Отдел2]")
 
-        elif text.startswith("/setdept"):
+        elif command == "/setdept":
             if not is_admin:
                 await telegram_client.send_message(chat_id, "❌ Нет прав.")
                 return {"ok": True}
@@ -276,13 +298,80 @@ async def telegram_webhook(secret: str, request: Request):
             if len(parts) == 2:
                 target_dept = parts[1].strip()
                 if chat_service.set_chat_department(chat_id, target_dept):
-                    await telegram_client.send_message(chat_id, f"✅ Текущий чат закреплен за отделом <b>{target_dept}</b>. Теперь сюда будут уходить только уведомления этого отдела.")
+                    departments = chat_service.get_chat_departments(chat_id)
+                    await telegram_client.send_message(chat_id, f"✅ Текущий чат закреплен за отделами: {_format_departments_for_message(departments)}. Теперь сюда будут уходить только уведомления этих отделов.")
                 else:
-                    await telegram_client.send_message(chat_id, "❌ Не удалось настроить текущий чат. Проверьте, что он добавлен через /addchat и отдел указан полностью.")
+                    await telegram_client.send_message(chat_id, "❌ Не удалось настроить текущий чат. Проверьте, что он добавлен через /addchat и отделы указаны полностью.")
             else:
-                await telegram_client.send_message(chat_id, "Использование: /setdept [Название отдела]")
+                await telegram_client.send_message(chat_id, "Использование: /setdept [Отдел1; Отдел2]")
 
-        elif text.startswith("/clearchatdept"):
+        elif command == "/addchatdept":
+            if not is_admin:
+                await telegram_client.send_message(chat_id, "❌ Нет прав.")
+                return {"ok": True}
+
+            parts = text.split(maxsplit=2)
+            if len(parts) == 3:
+                target_id = parts[1].strip()
+                target_dept = parts[2].strip()
+                if chat_service.add_chat_department(target_id, target_dept):
+                    departments = chat_service.get_chat_departments(target_id)
+                    await telegram_client.send_message(chat_id, f"✅ К чату <code>{target_id}</code> добавлены отделы: {_format_departments_for_message(departments)}.")
+                else:
+                    await telegram_client.send_message(chat_id, f"ℹ️ Не удалось добавить отдел к чату <code>{target_id}</code>. Чат не найден или такие отделы уже закреплены.")
+            else:
+                await telegram_client.send_message(chat_id, "Использование: /addchatdept [Chat ID] [Название отдела]")
+
+        elif command == "/adddept":
+            if not is_admin:
+                await telegram_client.send_message(chat_id, "❌ Нет прав.")
+                return {"ok": True}
+
+            parts = text.split(maxsplit=1)
+            if len(parts) == 2:
+                target_dept = parts[1].strip()
+                if chat_service.add_chat_department(chat_id, target_dept):
+                    departments = chat_service.get_chat_departments(chat_id)
+                    await telegram_client.send_message(chat_id, f"✅ К текущему чату добавлены отделы: {_format_departments_for_message(departments)}.")
+                else:
+                    await telegram_client.send_message(chat_id, "ℹ️ Не удалось добавить отдел. Чат не найден или такие отделы уже закреплены.")
+            else:
+                await telegram_client.send_message(chat_id, "Использование: /adddept [Название отдела]")
+
+        elif command == "/delchatdept":
+            if not is_admin:
+                await telegram_client.send_message(chat_id, "❌ Нет прав.")
+                return {"ok": True}
+
+            parts = text.split(maxsplit=2)
+            if len(parts) == 3:
+                target_id = parts[1].strip()
+                target_dept = parts[2].strip()
+                if chat_service.remove_chat_department(target_id, target_dept):
+                    departments = chat_service.get_chat_departments(target_id)
+                    await telegram_client.send_message(chat_id, f"✅ Отдел убран. Сейчас чат <code>{target_id}</code> закреплен за: {_format_departments_for_message(departments)}.")
+                else:
+                    await telegram_client.send_message(chat_id, f"ℹ️ Не удалось убрать отдел из чата <code>{target_id}</code>. Чат не найден или отдел не закреплен.")
+            else:
+                await telegram_client.send_message(chat_id, "Использование: /delchatdept [Chat ID] [Название отдела]")
+
+        elif command == "/deldept":
+            if not is_admin:
+                await telegram_client.send_message(chat_id, "❌ Нет прав.")
+                return {"ok": True}
+
+            parts = text.split(maxsplit=1)
+            if len(parts) == 2:
+                target_dept = parts[1].strip()
+                if chat_service.remove_chat_department(chat_id, target_dept):
+                    departments = chat_service.get_chat_departments(chat_id)
+                    await telegram_client.send_message(chat_id, f"✅ Отдел убран. Сейчас текущий чат закреплен за: {_format_departments_for_message(departments)}.")
+                else:
+                    await telegram_client.send_message(chat_id, "ℹ️ Не удалось убрать отдел. Чат не найден или отдел не закреплен.")
+            else:
+                await telegram_client.send_message(chat_id, "Использование: /deldept [Название отдела]")
+
+        elif command == "/clearchatdept":
             if not is_admin:
                 await telegram_client.send_message(chat_id, "❌ Нет прав.")
                 return {"ok": True}
@@ -297,7 +386,7 @@ async def telegram_webhook(secret: str, request: Request):
             else:
                 await telegram_client.send_message(chat_id, "Использование: /clearchatdept [Chat ID]")
 
-        elif text.startswith("/cleardept"):
+        elif command == "/cleardept":
             if not is_admin:
                 await telegram_client.send_message(chat_id, "❌ Нет прав.")
                 return {"ok": True}
@@ -307,7 +396,7 @@ async def telegram_webhook(secret: str, request: Request):
             else:
                 await telegram_client.send_message(chat_id, "ℹ️ У текущего чата нет фильтра отдела или чат не найден.")
 
-        elif text.startswith("/departments") or text.startswith("/depts"):
+        elif command in ("/departments", "/depts"):
             all_chats = chat_service.get_all_chats()
             if chat_id not in all_chats and not is_admin:
                 await telegram_client.send_message(chat_id, "❌ Этот чат не зарегистрирован в системе рассылки.")
@@ -318,7 +407,7 @@ async def telegram_webhook(secret: str, request: Request):
                 logger.error("Failed to fetch departments: %s", exc)
                 await telegram_client.send_message(chat_id, f"❌ Не удалось получить список отделов Workpace:\n<code>{exc}</code>")
 
-        elif text.startswith("/mute_all"):
+        elif command == "/mute_all":
             if not _can_manage_mutes(is_admin, chat_type):
                 await telegram_client.send_message(
                     chat_id,
@@ -338,7 +427,7 @@ async def telegram_webhook(secret: str, request: Request):
             else:
                 await telegram_client.send_message(chat_id, f"ℹ️ Все уведомления уже отключены {scope_label}.")
 
-        elif text.startswith("/unmute_all"):
+        elif command == "/unmute_all":
             if not _can_manage_mutes(is_admin, chat_type):
                 await telegram_client.send_message(
                     chat_id,
@@ -358,7 +447,7 @@ async def telegram_webhook(secret: str, request: Request):
             else:
                 await telegram_client.send_message(chat_id, f"ℹ️ Все уведомления не были отключены {scope_label}.")
             
-        elif text.startswith("/mute_user"):
+        elif command == "/mute_user":
             if not _can_manage_mutes(is_admin, chat_type):
                 await telegram_client.send_message(
                     chat_id,
@@ -379,7 +468,7 @@ async def telegram_webhook(secret: str, request: Request):
             else:
                 await telegram_client.send_message(chat_id, "Использование: /mute_user [ФИО сотрудника]")
 
-        elif text.startswith("/unmute_user"):
+        elif command == "/unmute_user":
             if not _can_manage_mutes(is_admin, chat_type):
                 await telegram_client.send_message(
                     chat_id,
@@ -400,7 +489,7 @@ async def telegram_webhook(secret: str, request: Request):
             else:
                 await telegram_client.send_message(chat_id, "Использование: /unmute_user [ФИО сотрудника]")
 
-        elif text.startswith("/mute_dept"):
+        elif command == "/mute_dept":
             if not _can_manage_mutes(is_admin, chat_type):
                 await telegram_client.send_message(
                     chat_id,
@@ -421,7 +510,7 @@ async def telegram_webhook(secret: str, request: Request):
             else:
                 await telegram_client.send_message(chat_id, "Использование: /mute_dept [Название отдела]")
 
-        elif text.startswith("/unmute_dept"):
+        elif command == "/unmute_dept":
             if not _can_manage_mutes(is_admin, chat_type):
                 await telegram_client.send_message(
                     chat_id,
@@ -442,7 +531,7 @@ async def telegram_webhook(secret: str, request: Request):
             else:
                 await telegram_client.send_message(chat_id, "Использование: /unmute_dept [Название отдела]")
 
-        elif text.startswith("/muted") or text.startswith("/mutes"):
+        elif command in ("/muted", "/mutes"):
             if not _can_manage_mutes(is_admin, chat_type):
                 await telegram_client.send_message(
                     chat_id,
@@ -478,7 +567,7 @@ async def telegram_webhook(secret: str, request: Request):
 
             await telegram_client.send_message(chat_id, "\n".join(response_parts))
 
-        elif text.startswith("/report"):
+        elif command == "/report":
             all_chats = chat_service.get_all_chats()
             if chat_id not in all_chats and not is_admin:
                 await telegram_client.send_message(chat_id, "❌ Этот чат не зарегистрирован в системе рассылки.")
@@ -525,14 +614,18 @@ async def telegram_webhook(secret: str, request: Request):
                 else:
                     dept_filter = " ".join(args)
 
-            chat_department = chat_service.get_chat_department(chat_id)
-            if chat_department and not is_admin:
-                chat_dept_lower = chat_department.casefold()
+            chat_departments = chat_service.get_chat_departments(chat_id)
+            if chat_departments and not is_admin:
                 dept_filter_lower = dept_filter.casefold() if dept_filter else ""
-                if dept_filter and chat_dept_lower not in dept_filter_lower and dept_filter_lower not in chat_dept_lower:
-                    await telegram_client.send_message(chat_id, f"❌ Этот чат закреплен за отделом <b>{chat_department}</b>. Отчет можно получить только по этому отделу.")
+                allowed_by_chat = any(
+                    chat_dept.casefold() in dept_filter_lower
+                    or dept_filter_lower in chat_dept.casefold()
+                    for chat_dept in chat_departments
+                )
+                if dept_filter and not allowed_by_chat:
+                    await telegram_client.send_message(chat_id, f"❌ Этот чат закреплен за отделами: {_format_departments_for_message(chat_departments)}. Отчет можно получить только по этим отделам.")
                     return {"ok": True}
-                dept_filter = dept_filter or chat_department
+                dept_filter = dept_filter or chat_departments
                 
             await telegram_client.send_message(chat_id, "⏳ <i>Генерирую Excel-отчет, пожалуйста подождите...</i>")
             from app.services.report_service import generate_report
