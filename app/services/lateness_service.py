@@ -170,6 +170,26 @@ def build_missing_out_message(rec: dict, plan_end_dt: datetime, now_dt: datetime
         "📋 Статус: ожидает отбивки"
     )
 
+def build_late_out_message(rec: dict, plan_end_dt: datetime, fact_out_dt: datetime, late_out_mins: int) -> str:
+    emp_name = rec.get("employeeName") or "—"
+    dept = rec.get("departmentName") or "—"
+    schedule = rec.get("scheduleName") or "—"
+    plan = _format_dt(plan_end_dt)
+    fact = _format_dt(fact_out_dt)
+    location = rec.get("outLocationName") or rec.get("locationName") or "—"
+
+    return (
+        "⏰ <b>Поздний уход</b>\n\n"
+        f"👤 Сотрудник: {emp_name}\n"
+        f"🏢 Отдел: {dept}\n"
+        f"📅 График: {schedule}\n"
+        f"🕐 Конец смены: {plan}\n"
+        f"🕑 Ушел: {fact}\n"
+        f"⏱ Ушел позже на: <b>{late_out_mins} мин.</b>\n"
+        f"📍 Локация: {location}\n\n"
+        "📋 Статус: ожидает отбивки"
+    )
+
 def build_suspicious_mark_message(mark: dict) -> str:
     emp_name = _employee_name(mark)
     dept = mark.get("departmentName") or mark.get("department") or "—"
@@ -301,9 +321,18 @@ async def poll_workpace() -> dict:
                         if plan_end_dt and fact_out_dt:
                             early_text = build_early_out_message(rec, plan_end_dt, fact_out_dt, early_out)
                             events_to_send.append((early_key, early_text, emp_name, dept_name))
+                else:
+                    fact_out_dt = _parse_dt(out_mark_str)
+                    if plan_end_dt and fact_out_dt:
+                        late_out_mins = int((fact_out_dt - plan_end_dt).total_seconds() / 60)
+                        if late_out_mins >= 60:
+                            late_out_key = _make_event_key(emp_id, date_str, "late_out")
+                            if late_out_key not in sent_events_cache:
+                                late_out_text = build_late_out_message(rec, plan_end_dt, fact_out_dt, late_out_mins)
+                                events_to_send.append((late_out_key, late_out_text, emp_name, dept_name))
             elif in_mark_str and plan_end_dt:
                 passed_end_mins = (now_local - plan_end_dt).total_seconds() / 60
-                if passed_end_mins >= 10:
+                if passed_end_mins >= 60:
                     missing_out_key = _make_event_key(emp_id, date_str, "missing_out")
                     if missing_out_key not in sent_events_cache:
                         missing_out_text = build_missing_out_message(rec, plan_end_dt, now_local)

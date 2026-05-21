@@ -136,7 +136,7 @@ async def telegram_webhook(secret: str, request: Request):
         from_user = msg.get("from", {})
         user_id = str(from_user.get("id", ""))
 
-        is_admin = (user_id == settings.default_telegram_chat_id) or (chat_id == settings.default_telegram_chat_id)
+        is_admin = (user_id in settings.admin_ids) or (chat_id in settings.admin_ids)
         command = _message_command(text)
 
         if command == "/start":

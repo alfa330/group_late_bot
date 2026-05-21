@@ -46,9 +46,10 @@ class ChatService:
             except Exception as e:
                 logger.error("Failed to load %s: %s", CHATS_FILE, e)
 
-        # Always ensure the default chat ID is included if we have one
-        if settings.default_telegram_chat_id:
-            self.chats.setdefault(settings.default_telegram_chat_id, {"department_filters": []})
+        # Always ensure the admin chat IDs are included
+        for admin_id in settings.admin_ids:
+            self.chats.setdefault(admin_id, {"department_filters": []})
+        if settings.admin_ids:
             self._save()
 
     @staticmethod
@@ -99,8 +100,8 @@ class ChatService:
 
     def remove_chat(self, chat_id: str) -> bool:
         chat_id = str(chat_id)
-        if chat_id == settings.default_telegram_chat_id:
-            # Prevent removing the default admin chat
+        if chat_id in settings.admin_ids:
+            # Prevent removing the admin chats
             return False
         if chat_id in self.chats:
             del self.chats[chat_id]
